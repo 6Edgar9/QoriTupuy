@@ -117,6 +117,18 @@ export async function crearSeccion(
 }
 
 /**
+ * Listar Secciones de una evaluación
+ */
+export async function listarSecciones(
+  cursoId: string,
+  evaluacionId: string
+): Promise<Seccion[]> {
+  const q = query(collection(db, getPaths.secciones(cursoId, evaluacionId)));
+  const snap = await getDocs(q.withConverter(converter<Seccion>()));
+  return snap.docs.map((d) => d.data());
+}
+
+/**
  * Obtener detalles y rúbrica de una sección específica
  */
 export async function obtenerSeccion(

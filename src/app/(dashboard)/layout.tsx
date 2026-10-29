@@ -36,6 +36,13 @@ export default function DashboardLayout({
             <span className="hidden sm:inline-block px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-100 text-amber-800 border border-amber-200">
               SaaS Universitario
             </span>
+            <Link
+              href="/cursos"
+              className="ml-2 px-3 py-1 text-xs font-semibold text-slate-700 hover:text-amber-700 hover:bg-amber-50 rounded-lg transition-colors flex items-center gap-1.5"
+            >
+              <BookOpen className="w-4 h-4 text-amber-600" />
+              <span>Cursos y Rúbricas</span>
+            </Link>
           </div>
 
           <div className="flex items-center gap-4 text-xs">

@@ -61,14 +61,20 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* Botón de acceso directo al Dashboard de Sección */}
-        <div className="pt-4 flex items-center justify-center gap-4">
+        {/* Botones de acceso directo */}
+        <div className="pt-4 flex flex-col sm:flex-row items-center justify-center gap-4">
+          <Link
+            href="/cursos"
+            className="w-full sm:w-auto inline-flex items-center justify-center gap-3 px-6 py-3.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-2xl shadow-lg shadow-amber-600/25 transition-all text-sm group"
+          >
+            <span>Gestionar Cursos, Exámenes y Rúbricas</span>
+            <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+          </Link>
           <Link
             href="/secciones/fila-a?cursoId=MAT-201&evaluacionId=PARCIAL-1"
-            className="inline-flex items-center gap-3 px-6 py-3.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-2xl shadow-lg shadow-amber-600/25 transition-all text-sm group"
+            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-3.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold rounded-2xl shadow-sm transition-all text-sm"
           >
-            <span>Ir al Dashboard de Evaluación (Fila A)</span>
-            <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+            <span>Ver Sección Demo (Fila A)</span>
           </Link>
         </div>
       </div>

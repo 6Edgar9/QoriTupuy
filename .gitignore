@@ -1,4 +1,4 @@
-# Dependencias
+# Dependencias y gestores de paquetes
 node_modules/
 /.pnp
 .pnp.js
@@ -8,33 +8,33 @@ node_modules/
 .yarn/install-state.gz
 .pnp.*
 
-# Build y salida de Next.js
+# Build y salida de compilación
 .next/
 out/
 build/
 dist/
+*.tsbuildinfo
+next-env.d.ts
 
-# Variables de entorno y credenciales (¡NUNCA subir a Git!)
+# Variables de entorno y credenciales (¡Seguridad Crítica!)
 .env
-.env.local
+.env*.local
 .env.development.local
 .env.test.local
 .env.production.local
 serviceAccountKey.json
 *.pem
 
-# Logs
+# Vercel CLI
+.vercel/
+
+# Logs del sistema
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# Diagnósticos y caché
-.vercel
-*.tsbuildinfo
-next-env.d.ts
-
-# IDEs y SO
+# Configuración de editores e IDEs
 .vscode/
 .idea/
 *.suo
@@ -42,6 +42,8 @@ next-env.d.ts
 *.njsproj
 *.sln
 *.sw?
+
+# Archivos del Sistema Operativo
 .DS_Store
 Thumbs.db
-
+desktop.ini
