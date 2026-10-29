@@ -1,0 +1,47 @@
+# Dependencias
+node_modules/
+/.pnp
+.pnp.js
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+.pnp.*
+
+# Build y salida de Next.js
+.next/
+out/
+build/
+dist/
+
+# Variables de entorno y credenciales (¡NUNCA subir a Git!)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+serviceAccountKey.json
+*.pem
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Diagnósticos y caché
+.vercel
+*.tsbuildinfo
+next-env.d.ts
+
+# IDEs y SO
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+Thumbs.db
+
