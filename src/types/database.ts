@@ -6,13 +6,24 @@ import { Timestamp } from 'firebase/firestore';
 export type EstadoRevision = 'aprobado_ia' | 'requiere_revision_manual' | 'corregido_manual';
 
 /**
- * Modelo para las opciones de respuesta en la rúbrica
+ * Tipos de preguntas soportadas por el motor multimodal de Gemini 1.5 Pro
+ */
+export type TipoPregunta =
+  | 'opcion_multiple'
+  | 'texto_abierto'
+  | 'relacionar_columnas'
+  | 'grafico_esquema'
+  | 'calculo';
+
+/**
+ * Modelo para las opciones de respuesta y criterios en la rúbrica
  */
 export interface ItemRubrica {
   numero_pregunta: number;
-  tipo: 'opcion_multiple' | 'verdadero_falso' | 'abierta_corta';
-  opciones_validas?: string[]; // ej. ['A', 'B', 'C', 'D']
-  respuesta_correcta: string;
+  tipo_pregunta: TipoPregunta;
+  tipo?: string; // Retrocompatibilidad
+  opciones_validas?: string[]; // ej. ['A', 'B', 'C', 'D', 'E'] para opción múltiple
+  respuesta_correcta: string; // Para opción múltiple: 'A', 'B', etc. Para el resto: Criterio de Evaluación / Respuesta Esperada amplia
   puntaje: number;
   penalidad_error?: number;
 }
@@ -63,11 +74,13 @@ export interface Seccion {
  */
 export interface DesglosePregunta {
   numero_pregunta: number;
+  tipo_pregunta?: TipoPregunta;
   respuesta_detectada: string;
   respuesta_correcta: string;
   es_correcta: boolean;
   puntaje_obtenido: number;
   confianza_item: number; // 0-100
+  justificacion?: string;
   observaciones?: string;
 }
 

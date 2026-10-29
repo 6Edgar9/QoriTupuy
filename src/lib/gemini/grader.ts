@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type, Schema } from '@google/genai';
-import { ItemRubrica, DesglosePregunta } from '@/types/database';
+import { ItemRubrica, DesglosePregunta, TipoPregunta } from '@/types/database';
 
 // Función helper para inicialización perezosa (evita warnings en builds estáticos de Next.js)
 function getGeminiClient(): GoogleGenAI {
@@ -22,7 +22,10 @@ export interface GeminiGraderOutput {
   desglose: {
     numero_pregunta: number;
     respuesta_detectada: string;
+    puntaje_asignado: number;
+    es_correcta: boolean;
     confianza_pregunta: number; // 0 - 100
+    justificacion: string;
     observaciones?: string;
   }[];
 }
@@ -42,30 +45,32 @@ export interface EvaluacionGradingResult {
 }
 
 /**
- * Prompt del sistema para Gemini 1.5 Pro configurado como evaluador universitario
+ * Prompt del sistema para Gemini 1.5 Pro configurado como evaluador universitario multimodal
  */
 const SYSTEM_PROMPT = `
-Eres "QoriTupuy AI", un evaluador universitario experto y riguroso en visión computacional y análisis caligráfico de exámenes manuscritos.
-Tu misión es transcribir y calificar con máxima precisión las respuestas marcadas o escritas a mano por los alumnos en la hoja de examen escaneada, contrastándolas contra la RÚBRICA OFICIAL que se te proporciona.
+Eres "QoriTupuy AI", un evaluador universitario experto y riguroso en visión computacional multimodal, análisis caligráfico y razonamiento científico para exámenes manuscritos.
+Tu misión es transcribir, interpretar y calificar con máxima precisión las respuestas marcadas, redactadas, calculadas o dibujadas por los estudiantes en la hoja de examen escaneada, contrastándolas contra la RÚBRICA OFICIAL MULTIMODAL.
 
-REGLAS DE EVALUACIÓN:
+REGLAS DE EVALUACIÓN MULTIMODAL:
 1. DETECCIÓN DE IDENTIDAD:
-   - Extrae el Nombre y Apellidos completos del alumno escritos en el encabezado.
-   - Si existe un campo para Código de Alumno o DNI/Matrícula, extráelo. Si no es legible, indícalo.
+   - Extrae el Nombre y Apellidos completos del estudiante detectados en el encabezado.
+   - Si existe un campo para Código de Alumno, DNI o Matrícula, extráelo con precisión.
 
-2. DETECCIÓN DE RESPUESTAS:
-   - Para opciones múltiples: identifica qué letra (A, B, C, D, E) o casilla rellenó o marcó el estudiante con bolígrafo/lápiz (ej. cruz, círculo, tachado o relleno).
-   - Identifica ambigüedades: Si el alumno marcó dos opciones y tachó una, determina cuál intentó dejar válida.
-   - Si no hay respuesta para una pregunta, marca "NO_RESPONDIDA".
+2. EVALUACIÓN SEGÚN EL TIPO DE PREGUNTA:
+   - 'opcion_multiple': Identifica qué letra (A, B, C, D, E) o casilla rellenó o marcó el estudiante con bolígrafo/lápiz (cruces, círculos, rellenos o tachaduras). Si marcó dos y tachó una, determina cuál dejó válida.
+   - 'texto_abierto' o 'calculo': Transcribe mentalmente la caligrafía manuscrita del estudiante y compárala semánticamente contra el Criterio de Evaluación de la rúbrica. En cálculos matemáticos, revisa tanto el procedimiento numérico como el resultado final.
+   - 'relacionar_columnas' o 'grafico_esquema': Inspecciona visualmente las líneas de conexión, flechas, diagramas o palabras escritas en recuadros del examen y valida si coinciden con la rúbrica esperada.
+   - Asigna el puntaje total o parcial (de 0 al puntaje máximo indicado para cada pregunta) según el nivel de acierto, y siempre incluye una justificación breve y clara de por qué asignaste ese puntaje en el campo "justificacion".
+   - Si no hay respuesta visible para una pregunta, marca respuesta_detectada como "NO_RESPONDIDA", asigna 0 puntos y anota la ausencia en la justificación.
 
 3. CÁLCULO DE CONFIANZA DE LECTURA (0 A 100):
    - confianza_pregunta: asígnale de 0 a 100 según la nitidez visual y certidumbre caligráfica de cada respuesta.
    - confianza_lectura global: calcula un promedio ponderado de la legibilidad general del examen.
-   - Si la caligrafía es borrosa, ilegible, hay borrones severos, o no estás seguro de la respuesta de alguna pregunta, asigna una confianza < 75 para esa pregunta y refleja esa incertidumbre en confianza_lectura global.
-   - Si la confianza global es inferior a 85, marca "requiere_revision_humana: true" y detalla en "motivo_revision_manual" la razón (ej. "Mancha en pregunta 4", "Nombre con caligrafía difusa").
+   - Si la caligrafía es borrosa, ilegible, hay borrones severos o trazos ambiguos que impidan una evaluación certera, asigna una confianza < 75 para esa pregunta y refleja esa incertidumbre en confianza_lectura global.
+   - Si la confianza global es inferior a 85, marca "requiere_revision_humana: true" y detalla en "motivo_revision_manual" la razón (ej. "Caligrafía difusa en desarrollo de P3", "Borrones en esquema de P4").
 
 4. FORMATO DE SALIDA ESTRICTO:
-   - Debes responder EXCLUSIVAMENTE con el objeto JSON estructurado según el esquema solicitado. No incluyas markdown adicional, ni etiquetas html ni texto fuera del JSON.
+   - Responde EXCLUSIVAMENTE con el objeto JSON estructurado según el esquema solicitado. No agregues texto fuera del JSON.
 `;
 
 const responseSchema: Schema = {
@@ -100,18 +105,37 @@ const responseSchema: Schema = {
           numero_pregunta: { type: Type.INTEGER },
           respuesta_detectada: {
             type: Type.STRING,
-            description: 'Opción detectada (ej. "A", "B", "C", "NO_RESPONDIDA")',
+            description: 'Opción marcada ("A", "B"...), transcripción del texto manuscrito o descripción del esquema detectado',
+          },
+          puntaje_asignado: {
+            type: Type.NUMBER,
+            description: 'Puntaje asignado (total o parcial) entre 0 y el máximo de la pregunta',
+          },
+          es_correcta: {
+            type: Type.BOOLEAN,
+            description: 'Verdadero si la respuesta cumple sustancialmente con el criterio o clave',
           },
           confianza_pregunta: {
             type: Type.NUMBER,
             description: 'Nivel de certeza de lectura de 0 a 100 para este ítem',
           },
+          justificacion: {
+            type: Type.STRING,
+            description: 'Justificación breve de por qué se asignó ese puntaje según el criterio de la rúbrica',
+          },
           observaciones: {
             type: Type.STRING,
-            description: 'Anotaciones sobre borrones, tachaduras o claridad del trazo',
+            description: 'Anotaciones sobre borrones, tachaduras o claridad del trazo manuscrito',
           },
         },
-        required: ['numero_pregunta', 'respuesta_detectada', 'confianza_pregunta'],
+        required: [
+          'numero_pregunta',
+          'respuesta_detectada',
+          'puntaje_asignado',
+          'es_correcta',
+          'confianza_pregunta',
+          'justificacion',
+        ],
       },
     },
   },
@@ -126,38 +150,34 @@ const responseSchema: Schema = {
 /**
  * Ejecuta la evaluación multimodal de la imagen del examen contra la rúbrica oficial usando Gemini 1.5 Pro.
  * 
- * @param imageBuffer Buffer de la imagen (PNG/JPEG) de la página del examen
- * @param mimeType Tipo MIME de la imagen ('image/png' | 'image/jpeg' | 'application/pdf')
- * @param rubrica Lista de preguntas, respuestas correctas y ponderaciones de la sección
+ * @param imageBuffer Buffer de la imagen (PNG/JPEG) o documento PDF de la página del examen
+ * @param mimeType Tipo MIME ('image/png' | 'image/jpeg' | 'application/pdf')
+ * @param rubrica Lista de preguntas, tipos, criterios de evaluación y ponderaciones de la sección
  */
 export async function calificarExamenConGemini(
   imageBuffer: Buffer | Uint8Array,
   mimeType: 'image/png' | 'image/jpeg' | 'application/pdf',
   rubrica: ItemRubrica[]
 ): Promise<EvaluacionGradingResult> {
-  if (!process.env.GEMINI_API_KEY) {
-    throw new Error('Variable de entorno GEMINI_API_KEY no configurada.');
-  }
-
   const base64Data = Buffer.isBuffer(imageBuffer)
     ? imageBuffer.toString('base64')
     : Buffer.from(imageBuffer).toString('base64');
 
   const rubricaFormateada = rubrica.map((item) => ({
-    pregunta: item.numero_pregunta,
-    tipo: item.tipo,
-    respuesta_correcta: item.respuesta_correcta,
-    puntaje: item.puntaje,
+    numero_pregunta: item.numero_pregunta,
+    tipo_pregunta: item.tipo_pregunta || item.tipo || 'opcion_multiple',
+    criterio_o_respuesta_correcta: item.respuesta_correcta,
+    puntaje_maximo: item.puntaje,
     penalidad_error: item.penalidad_error || 0,
   }));
 
   const userPrompt = `
-Por favor, analiza y califica la imagen del examen adjunto siguiendo estrictamente esta rúbrica oficial:
+Por favor, analiza y califica visualmente el examen adjunto contrastándolo contra esta RÚBRICA MULTIMODAL:
 
-RÚBRICA OFICIAL:
 ${JSON.stringify(rubricaFormateada, null, 2)}
 
-Total de preguntas esperadas: ${rubrica.length}.
+Total de preguntas a evaluar: ${rubrica.length}.
+Para cada pregunta, evalúa la caligrafía, transcripción, cálculo, conexiones o marcas y asigna el puntaje con su respectiva justificación.
 `;
 
   try {
@@ -182,7 +202,7 @@ Total de preguntas esperadas: ${rubrica.length}.
       ],
       config: {
         systemInstruction: SYSTEM_PROMPT,
-        temperature: 0.1, // Baja temperatura para determinismo y precisión en transcripción
+        temperature: 0.1, // Determinismo y rigurosidad
         responseMimeType: 'application/json',
         responseSchema,
       },
@@ -191,45 +211,57 @@ Total de preguntas esperadas: ${rubrica.length}.
     const responseText = response.text?.trim() || '{}';
     const parsedData: GeminiGraderOutput = JSON.parse(responseText);
 
-    // Cruzar las respuestas detectadas por Gemini con la rúbrica oficial para computar la nota exacta
+    // Consolidar puntajes y desgloses
     let notaTotalCalculada = 0;
     let notaMaximaPosible = 0;
 
     const desgloseCompleto: DesglosePregunta[] = rubrica.map((itemRubrica) => {
       notaMaximaPosible += itemRubrica.puntaje;
 
-      // Buscar coincidencia en el array devuelto por Gemini
       const detectado = parsedData.desglose?.find(
         (d) => d.numero_pregunta === itemRubrica.numero_pregunta
       );
 
-      const respuestaDetectada = detectado?.respuesta_detectada?.toUpperCase().trim() || 'NO_RESPONDIDA';
-      const esCorrecta = respuestaDetectada === itemRubrica.respuesta_correcta.toUpperCase().trim();
+      const tipoPregunta = (itemRubrica.tipo_pregunta || itemRubrica.tipo || 'opcion_multiple') as TipoPregunta;
+      const respuestaDetectada = detectado?.respuesta_detectada?.trim() || 'NO_RESPONDIDA';
 
       let puntajeObtenido = 0;
-      if (esCorrecta) {
-        puntajeObtenido = itemRubrica.puntaje;
-      } else if (itemRubrica.penalidad_error && respuestaDetectada !== 'NO_RESPONDIDA') {
-        puntajeObtenido = -Math.abs(itemRubrica.penalidad_error);
+      let esCorrecta = false;
+
+      if (tipoPregunta === 'opcion_multiple') {
+        const respUpper = respuestaDetectada.toUpperCase();
+        const claveUpper = itemRubrica.respuesta_correcta.toUpperCase().trim();
+        esCorrecta = respUpper === claveUpper;
+
+        if (esCorrecta) {
+          puntajeObtenido = itemRubrica.puntaje;
+        } else if (itemRubrica.penalidad_error && respUpper !== 'NO_RESPONDIDA') {
+          puntajeObtenido = -Math.abs(itemRubrica.penalidad_error);
+        }
+      } else {
+        // Para preguntas multimodales abiertas, cálculo, columnas y esquemas:
+        // Tomamos el puntaje_asignado por Gemini, acotándolo estrictamente entre 0 y el máximo de la pregunta
+        const puntajeIA = typeof detectado?.puntaje_asignado === 'number' ? detectado.puntaje_asignado : 0;
+        puntajeObtenido = Math.min(itemRubrica.puntaje, Math.max(0, Number(puntajeIA.toFixed(2))));
+        esCorrecta = detectado?.es_correcta ?? puntajeObtenido >= itemRubrica.puntaje * 0.5;
       }
 
       notaTotalCalculada += puntajeObtenido;
 
       return {
         numero_pregunta: itemRubrica.numero_pregunta,
+        tipo_pregunta: tipoPregunta,
         respuesta_detectada: respuestaDetectada,
         respuesta_correcta: itemRubrica.respuesta_correcta,
         es_correcta: esCorrecta,
         puntaje_obtenido: puntajeObtenido,
         confianza_item: detectado?.confianza_pregunta ?? 50,
+        justificacion: detectado?.justificacion || '',
         observaciones: detectado?.observaciones,
       };
     });
 
-    // Asegurar que la nota total no sea menor a 0
     const notaFinalNormalizada = Math.max(0, Number(notaTotalCalculada.toFixed(2)));
-
-    // Determinar si requiere revisión forzosa por confianza < 85
     const confianzaLectura = Math.min(100, Math.max(0, Math.round(parsedData.confianza_lectura || 0)));
     const requiereRevision = confianzaLectura < 85 || parsedData.requiere_revision_humana;
 
@@ -250,4 +282,3 @@ Total de preguntas esperadas: ${rubrica.length}.
     throw new Error(`Fallo en el servicio de calificación IA: ${(error as Error).message}`);
   }
 }
-

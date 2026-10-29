@@ -166,40 +166,52 @@ export default function ManualGradingDrawer({
                 <h4 className="text-sm font-semibold text-slate-700 mb-2">
                   Detección Ítem por Ítem (Gemini 1.5 Pro)
                 </h4>
-                <div className="max-h-48 overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100 text-xs">
+                <div className="max-h-56 overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100 text-xs">
                   {examen.desglose_json.map((item) => (
                     <div
                       key={item.numero_pregunta}
-                      className="px-3 py-2 flex items-center justify-between hover:bg-slate-50"
+                      className="px-3 py-2.5 space-y-1 hover:bg-slate-50 transition-colors"
                     >
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-slate-700">P{item.numero_pregunta}:</span>
-                        <span>
-                          Marcada: <strong className="font-semibold">{item.respuesta_detectada}</strong>
-                        </span>
-                        <span className="text-slate-400">|</span>
-                        <span>
-                          Clave: <strong className="text-emerald-700">{item.respuesta_correcta}</strong>
-                        </span>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-slate-800 bg-slate-100 px-1.5 py-0.5 rounded text-[11px]">
+                            P{item.numero_pregunta}
+                          </span>
+                          {item.tipo_pregunta && item.tipo_pregunta !== 'opcion_multiple' && (
+                            <span className="text-[10px] uppercase font-semibold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                              {item.tipo_pregunta.replace('_', ' ')}
+                            </span>
+                          )}
+                          <span className="text-slate-600 line-clamp-1">
+                            Detectado: <strong className="font-semibold text-slate-900">{item.respuesta_detectada}</strong>
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`font-bold ${
+                              item.es_correcta ? 'text-emerald-600' : 'text-red-500'
+                            }`}
+                          >
+                            +{item.puntaje_obtenido} pts
+                          </span>
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                              item.confianza_item >= 80
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-amber-100 text-amber-800'
+                            }`}
+                          >
+                            {item.confianza_item}% conf.
+                          </span>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-3">
-                        <span
-                          className={`font-semibold ${
-                            item.es_correcta ? 'text-emerald-600' : 'text-red-500'
-                          }`}
-                        >
-                          {item.es_correcta ? `+${item.puntaje_obtenido} pts` : '0 pts'}
-                        </span>
-                        <span
-                          className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
-                            item.confianza_item >= 80
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-amber-100 text-amber-800'
-                          }`}
-                        >
-                          {item.confianza_item}% conf.
-                        </span>
-                      </div>
+
+                      {/* Justificación semántica de la IA para preguntas multimodales */}
+                      {item.justificacion && (
+                        <p className="text-[11px] text-slate-500 italic pl-6">
+                          Justificación IA: "{item.justificacion}"
+                        </p>
+                      )}
                     </div>
                   ))}
                 </div>

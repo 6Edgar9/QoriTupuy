@@ -26,6 +26,7 @@ import {
   crearSeccion,
 } from '@/lib/firebase/firestore.service';
 import { Curso, Evaluacion, Seccion, ItemRubrica } from '@/types/database';
+import RubricEditor from '@/components/rubric/RubricEditor';
 
 export default function GestionCursosPage() {
   // Datos principales
@@ -135,8 +136,9 @@ export default function GestionCursosPage() {
     const cant = Math.max(1, Math.min(50, totalPreguntas));
     const items: ItemRubrica[] = Array.from({ length: cant }, (_, i) => ({
       numero_pregunta: i + 1,
+      tipo_pregunta: 'opcion_multiple',
       tipo: 'opcion_multiple',
-      opciones_validas: ['A', 'B', 'C', 'D'],
+      opciones_validas: ['A', 'B', 'C', 'D', 'E'],
       respuesta_correcta: 'A',
       puntaje: Number((20 / cant).toFixed(2)),
       penalidad_error: 0,
@@ -229,18 +231,6 @@ export default function GestionCursosPage() {
     } finally {
       setSubmitting(false);
     }
-  };
-
-  const actualizarItemRubrica = (
-    index: number,
-    campo: keyof ItemRubrica,
-    valor: string | number
-  ) => {
-    setRubricaDraft((prev) => {
-      const copy = [...prev];
-      copy[index] = { ...copy[index], [campo]: valor };
-      return copy;
-    });
   };
 
   return (
@@ -649,52 +639,12 @@ export default function GestionCursosPage() {
                 </div>
               </div>
 
-              {/* Editor visual de la Rúbrica */}
+              {/* Editor visual de la Rúbrica Multimodal */}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-2">
-                  Claves de Respuestas Correctas y Puntos por Ítem:
+                  Configuración Multimodal de Preguntas y Criterios:
                 </label>
-                <div className="max-h-60 overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100 p-2 bg-slate-50/50">
-                  {rubricaDraft.map((item, idx) => (
-                    <div key={item.numero_pregunta} className="py-2 px-3 flex items-center justify-between text-xs">
-                      <span className="font-bold text-slate-800 w-16">
-                        Pregunta {item.numero_pregunta}:
-                      </span>
-                      {/* Opciones de respuesta A, B, C, D, E */}
-                      <div className="flex items-center gap-1.5">
-                        {['A', 'B', 'C', 'D', 'E'].map((opt) => (
-                          <button
-                            key={opt}
-                            type="button"
-                            onClick={() => actualizarItemRubrica(idx, 'respuesta_correcta', opt)}
-                            className={`w-7 h-7 rounded-lg font-bold text-xs transition-all ${
-                              item.respuesta_correcta === opt
-                                ? 'bg-amber-600 text-white shadow-sm'
-                                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
-                            }`}
-                          >
-                            {opt}
-                          </button>
-                        ))}
-                      </div>
-
-                      {/* Puntaje por pregunta */}
-                      <div className="flex items-center gap-1">
-                        <span className="text-[11px] text-slate-400">Pts:</span>
-                        <input
-                          type="number"
-                          step="0.5"
-                          min="0.5"
-                          value={item.puntaje}
-                          onChange={(e) =>
-                            actualizarItemRubrica(idx, 'puntaje', parseFloat(e.target.value) || 1)
-                          }
-                          className="w-16 px-2 py-1 text-xs border border-slate-300 rounded bg-white text-center font-semibold"
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                <RubricEditor rubrica={rubricaDraft} onChange={setRubricaDraft} />
               </div>
 
               <div className="pt-3 border-t border-slate-200 flex justify-end gap-3">
