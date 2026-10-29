@@ -189,3 +189,4 @@ export default function RubricEditor({ rubrica, onChange }: RubricEditorProps) {
     </div>
   );
 }
+
