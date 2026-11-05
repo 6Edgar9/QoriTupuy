@@ -16,7 +16,21 @@ export type TipoPregunta =
   | 'relacionar_columnas'
   | 'grafico_esquema'
   | 'calculo'
+  | 'completar_espacios'
+  | 'ordenamiento_secuencia'
+  | 'rotulado_imagen'
+  | 'respuesta_corta'
+  | 'ensayo_multicriterio'
   | 'opcion_multiple'; // retrocompatibilidad
+
+/**
+ * Criterio detallado para preguntas de tipo ensayo_multicriterio
+ */
+export interface CriterioEnsayoItem {
+  nombre: string;     // ej. "Ortografía y Redacción", "Coherencia argumentativa"
+  puntaje: number;    // ej. 2 pts
+  descripcion?: string; // Guía para la IA sobre qué buscar
+}
 
 /**
  * Modelo para las opciones de respuesta y criterios en la rúbrica
@@ -25,10 +39,12 @@ export interface ItemRubrica {
   numero_pregunta: number;
   tipo_pregunta: TipoPregunta;
   tipo?: string; // Retrocompatibilidad
-  cantidad_alternativas?: number; // Usado para 'opcion_multiple_dinamica' (ej. 2 a 5 o más)
+  cantidad_alternativas?: number; // Usado para 'opcion_multiple_dinamica' (ej. 2 a 10)
   opciones_validas?: string[]; // ej. ['A', 'B', 'C', 'D', 'E']
-  respuesta_correcta: string; // Para opción múltiple: 'A', 'B'... Para V/F: 'V' o 'F'... Para abierta: Criterio/Respuesta esperada
+  respuesta_correcta: string; // Clave, criterio o descripción esperada
   respuesta_esperada_texto?: string; // Criterio de Justificación Esperada (ej. si V/F justificado es 'F')
+  palabras_clave?: string[]; // Para 'completar_espacios' y 'respuesta_corta'
+  criterios_ensayo?: string[] | CriterioEnsayoItem[]; // Para 'ensayo_multicriterio'
   puntaje: number;
   penalidad_error?: number;
 }

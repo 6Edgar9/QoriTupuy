@@ -48,7 +48,7 @@ export interface EvaluacionGradingResult {
  * Prompt del sistema para Gemini 1.5 Pro configurado como evaluador universitario multimodal
  */
 const SYSTEM_PROMPT = `
-Eres "QoriTupuy AI", un evaluador universitario experto y riguroso en visión computacional multimodal, análisis caligráfico y razonamiento científico para exámenes manuscritos.
+Eres "QoriTupuy AI", un evaluador universitario experto y riguroso en visión computacional multimodal, análisis caligráfico, razonamiento anatómico, científico y pedagógico para exámenes manuscritos.
 Tu misión es transcribir, interpretar y calificar con máxima precisión las respuestas marcadas, redactadas, calculadas o dibujadas por los estudiantes en la hoja de examen escaneada, contrastándolas contra la RÚBRICA OFICIAL MULTIMODAL.
 
 REGLAS DE EVALUACIÓN SEGÚN EL TIPO DE PREGUNTA:
@@ -56,13 +56,17 @@ REGLAS DE EVALUACIÓN SEGÚN EL TIPO DE PREGUNTA:
    - Extrae el Nombre y Apellidos completos del estudiante detectados en el encabezado.
    - Si existe un campo para Código de Alumno, DNI o Matrícula, extráelo con precisión.
 
-2. EVALUACIÓN ESPECÍFICA POR TIPO:
+2. EVALUACIÓN ESPECÍFICA POR FORMATO:
    - 'opcion_multiple_dinamica' (u 'opcion_multiple'): Busca la marca del alumno solo entre las X alternativas permitidas (indicadas en cantidad_alternativas u opciones_validas, ej. A, B, C...). Identifica qué letra rellenó, marcó o circuló el estudiante. Si marcó dos y tachó una, determina cuál dejó válida.
    - 'verdadero_falso': Busca marcas como V/F, Verdadero/Falso, T/F o checks/cruces en las casillas correspondientes. Compara directamente con la clave (V o F).
    - 'verdadero_falso_justificado': Primero verifica si el alumno marcó V o F.
        * Si la clave correcta es V y el alumno marcó V: Asigna el puntaje total (no requiere justificación).
        * Si la clave correcta era Falso (F), el alumno DEBE haber marcado F y además DEBE haber escrito una corrección manuscrita. Transcribe mentalmente esa caligrafía manuscrita y compárala semánticamente con el "Criterio de Justificación Esperada" de la rúbrica.
        * Calcula puntaje parcial (ej. 50% de los puntos) si marcó Falso pero omitió o justificó incorrectamente la corrección, o puntaje total (100%) si ambas partes (marca F y justificación escrita) son correctas. Si marcó Verdadero siendo Falso, asigna 0 puntos.
+   - 'completar_espacios' / 'respuesta_corta': Busca las palabras manuscritas en los espacios en blanco, líneas punteadas o líneas cortas del examen. Acepta sinónimos clínicos/científicos válidos si el contexto conceptual es correcto, contrastando prioritariamente con el array de 'palabras_clave' y la respuesta esperada.
+   - 'ordenamiento_secuencia': Evalúa si los números, letras o flechas manuscritas por el alumno respetan el orden cronológico o lógico indicado en la rúbrica (ej. 1-C, 2-A, 3-D, 4-B). Otorga puntaje parcial si el orden es parcialmente correcto y puntaje total si la secuencia es exacta.
+   - 'rotulado_imagen': Realiza una inspección espacial profunda de la imagen o esquema. Sigue visualmente las líneas guía, flechas o señaladores del diagrama impreso hacia donde el alumno escribió a mano, y valida si la palabra manuscrita coincide anatómica, espacial y conceptualmente con la rúbrica.
+   - 'ensayo_multicriterio': Lee con atención el texto extenso o ensayo manuscrito. Evalúa y otorga puntaje independiente por CADA UNO de los criterios definidos en 'criterios_ensayo' (ej. Contenido, Coherencia, Uso de términos, Ortografía). Suma los subtotales para determinar la nota final de la pregunta y detalla en la justificación cómo le fue al estudiante en cada criterio evaluado.
    - 'texto_abierto' o 'calculo': Transcribe mentalmente la caligrafía manuscrita del estudiante y compárala semánticamente contra el Criterio de Evaluación de la rúbrica. En cálculos matemáticos, revisa tanto el procedimiento numérico como el resultado final.
    - 'relacionar_columnas' o 'grafico_esquema': Inspecciona visualmente las líneas de conexión, flechas, diagramas o palabras escritas en recuadros del examen y valida si coinciden con la rúbrica esperada.
    - Asigna el puntaje total o parcial (de 0 al puntaje máximo indicado para cada pregunta) según el nivel de acierto, y siempre incluye una justificación breve y clara de por qué asignaste ese puntaje en el campo "justificacion".
@@ -72,7 +76,7 @@ REGLAS DE EVALUACIÓN SEGÚN EL TIPO DE PREGUNTA:
    - confianza_pregunta: asígnale de 0 a 100 según la nitidez visual y certidumbre caligráfica de cada respuesta.
    - confianza_lectura global: calcula un promedio ponderado de la legibilidad general del examen.
    - Si la caligrafía es borrosa, ilegible, hay borrones severos o trazos ambiguos que impidan una evaluación certera, asigna una confianza < 75 para esa pregunta y refleja esa incertidumbre en confianza_lectura global.
-   - Si la confianza global es inferior a 85, marca "requiere_revision_humana: true" y detalla en "motivo_revision_manual" la razón (ej. "Caligrafía difusa en justificación de P2", "Borrones en esquema de P4").
+   - Si la confianza global es inferior a 85, marca "requiere_revision_humana: true" y detalla en "motivo_revision_manual" la razón (ej. "Caligrafía difusa en rotulado de P3", "Borrones en ensayo de P5").
 
 4. FORMATO DE SALIDA ESTRICTO:
    - Responde EXCLUSIVAMENTE con el objeto JSON estructurado según el esquema solicitado. No agregues texto fuera del JSON.
@@ -177,18 +181,20 @@ export async function calificarExamenConGemini(
       opciones_validas: item.opciones_validas,
       clave_o_criterio: item.respuesta_correcta,
       criterio_justificacion_si_falso: item.respuesta_esperada_texto,
+      palabras_clave: item.palabras_clave,
+      criterios_ensayo: item.criterios_ensayo,
       puntaje_maximo: item.puntaje,
       penalidad_error: item.penalidad_error || 0,
     };
   });
 
   const userPrompt = `
-Por favor, analiza y califica visualmente el examen adjunto contrastándolo contra esta RÚBRICA MULTIMODAL AVANZADA:
+Por favor, analiza y califica visualmente el examen adjunto contrastándolo contra esta RÚBRICA MULTIMODAL UNIVERSAL:
 
 ${JSON.stringify(rubricaFormateada, null, 2)}
 
 Total de preguntas a evaluar: ${rubrica.length}.
-Para cada pregunta, evalúa la caligrafía, transcripción, opciones dinámicas, marcas V/F, justificaciones manuscritas, cálculos, conexiones o marcas y asigna el puntaje con su respectiva justificación.
+Para cada pregunta, evalúa la caligrafía, transcripción, opciones dinámicas, marcas V/F, justificaciones manuscritas, espacios completados, palabras clave, orden de secuencias, rotulados espaciales, ensayos multicriterio, cálculos o esquemas y asigna el puntaje con su respectiva justificación.
 `;
 
   try {
@@ -261,7 +267,8 @@ Para cada pregunta, evalúa la caligrafía, transcripción, opciones dinámicas,
           puntajeObtenido = -Math.abs(itemRubrica.penalidad_error);
         }
       } else {
-        // Para verdadero_falso_justificado, texto abierto, cálculo, columnas y esquemas:
+        // Para verdadero_falso_justificado, completar_espacios, respuesta_corta, ordenamiento_secuencia,
+        // rotulado_imagen, ensayo_multicriterio, texto_abierto, calculo, columnas y esquemas:
         // Tomamos el puntaje_asignado por Gemini, acotándolo estrictamente entre 0 y el máximo de la pregunta
         const puntajeIA = typeof detectado?.puntaje_asignado === 'number' ? detectado.puntaje_asignado : 0;
         puntajeObtenido = Math.min(itemRubrica.puntaje, Math.max(0, Number(puntajeIA.toFixed(2))));
@@ -274,7 +281,10 @@ Para cada pregunta, evalúa la caligrafía, transcripción, opciones dinámicas,
         numero_pregunta: itemRubrica.numero_pregunta,
         tipo_pregunta: tipoPregunta,
         respuesta_detectada: respuestaDetectada,
-        respuesta_correcta: itemRubrica.respuesta_correcta + (itemRubrica.respuesta_esperada_texto ? ` (Justificación: ${itemRubrica.respuesta_esperada_texto})` : ''),
+        respuesta_correcta:
+          itemRubrica.respuesta_correcta +
+          (itemRubrica.respuesta_esperada_texto ? ` (Justificación: ${itemRubrica.respuesta_esperada_texto})` : '') +
+          (itemRubrica.palabras_clave && itemRubrica.palabras_clave.length > 0 ? ` [Claves: ${itemRubrica.palabras_clave.join(', ')}]` : ''),
         es_correcta: esCorrecta,
         puntaje_obtenido: puntajeObtenido,
         confianza_item: detectado?.confianza_pregunta ?? 50,
