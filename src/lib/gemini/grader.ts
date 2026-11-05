@@ -1,7 +1,13 @@
 import { GoogleGenAI, Type, Schema } from '@google/genai';
 import { ItemRubrica, DesglosePregunta, TipoPregunta } from '@/types/database';
 
-// Función helper para inicialización perezosa (evita warnings en builds estáticos de Next.js)
+// Modelos Gemini candidatos en orden de preferencia y resiliencia
+const GEMINI_MODELS = [
+  process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+  'gemini-2.5-pro',
+  'gemini-1.5-pro',
+  'gemini-flash-latest',
+];
 function getGeminiClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -199,34 +205,51 @@ Para cada pregunta, evalúa la caligrafía, transcripción, opciones dinámicas,
 
   try {
     const ai = getGeminiClient();
-    const response = await ai.models.generateContent({
-      model: 'gemini-1.5-pro',
-      contents: [
-        {
-          role: 'user',
-          parts: [
+    let lastError: Error | null = null;
+    let parsedData: GeminiGraderOutput | null = null;
+
+    for (const modelName of GEMINI_MODELS) {
+      try {
+        const response = await ai.models.generateContent({
+          model: modelName,
+          contents: [
             {
-              inlineData: {
-                mimeType,
-                data: base64Data,
-              },
-            },
-            {
-              text: userPrompt,
+              role: 'user',
+              parts: [
+                {
+                  inlineData: {
+                    mimeType,
+                    data: base64Data,
+                  },
+                },
+                {
+                  text: userPrompt,
+                },
+              ],
             },
           ],
-        },
-      ],
-      config: {
-        systemInstruction: SYSTEM_PROMPT,
-        temperature: 0.1, // Determinismo y rigurosidad
-        responseMimeType: 'application/json',
-        responseSchema,
-      },
-    });
+          config: {
+            systemInstruction: SYSTEM_PROMPT,
+            temperature: 0.1, // Determinismo y rigurosidad
+            responseMimeType: 'application/json',
+            responseSchema,
+          },
+        });
 
-    const responseText = response.text?.trim() || '{}';
-    const parsedData: GeminiGraderOutput = JSON.parse(responseText);
+        const responseText = response.text?.trim() || '{}';
+        parsedData = JSON.parse(responseText);
+        if (parsedData && parsedData.nombre_detectado) {
+          break;
+        }
+      } catch (err) {
+        console.warn(`Intento fallido con modelo ${modelName}:`, (err as Error).message);
+        lastError = err as Error;
+      }
+    }
+
+    if (!parsedData) {
+      throw new Error(`Fallo en el servicio de calificación IA (todos los modelos agotados): ${lastError?.message || 'Sin respuesta'}`);
+    }
 
     // Consolidar puntajes y desgloses
     let notaTotalCalculada = 0;
@@ -277,6 +300,12 @@ Para cada pregunta, evalúa la caligrafía, transcripción, opciones dinámicas,
 
       notaTotalCalculada += puntajeObtenido;
 
+      let rawItemConf = typeof detectado?.confianza_pregunta === 'number' ? detectado.confianza_pregunta : 80;
+      if (rawItemConf > 0 && rawItemConf <= 1) {
+        rawItemConf = rawItemConf * 100;
+      }
+      const confianzaItem = Math.min(100, Math.max(0, Math.round(rawItemConf)));
+
       return {
         numero_pregunta: itemRubrica.numero_pregunta,
         tipo_pregunta: tipoPregunta,
@@ -287,14 +316,19 @@ Para cada pregunta, evalúa la caligrafía, transcripción, opciones dinámicas,
           (itemRubrica.palabras_clave && itemRubrica.palabras_clave.length > 0 ? ` [Claves: ${itemRubrica.palabras_clave.join(', ')}]` : ''),
         es_correcta: esCorrecta,
         puntaje_obtenido: puntajeObtenido,
-        confianza_item: detectado?.confianza_pregunta ?? 50,
+        confianza_item: confianzaItem,
         justificacion: detectado?.justificacion || '',
         observaciones: detectado?.observaciones,
       };
     });
 
     const notaFinalNormalizada = Math.max(0, Number(notaTotalCalculada.toFixed(2)));
-    const confianzaLectura = Math.min(100, Math.max(0, Math.round(parsedData.confianza_lectura || 0)));
+    let rawConfidence = typeof parsedData.confianza_lectura === 'number' ? parsedData.confianza_lectura : 0;
+    // Si la IA devolvió decimal en rango 0..1 (ej: 0.95), convertirlo a escala 0..100 (95)
+    if (rawConfidence > 0 && rawConfidence <= 1) {
+      rawConfidence = rawConfidence * 100;
+    }
+    const confianzaLectura = Math.min(100, Math.max(0, Math.round(rawConfidence)));
     const requiereRevision = confianzaLectura < 85 || parsedData.requiere_revision_humana;
 
     return {
