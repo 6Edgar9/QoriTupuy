@@ -9,11 +9,14 @@ export type EstadoRevision = 'aprobado_ia' | 'requiere_revision_manual' | 'corre
  * Tipos de preguntas soportadas por el motor multimodal de Gemini 1.5 Pro
  */
 export type TipoPregunta =
-  | 'opcion_multiple'
+  | 'opcion_multiple_dinamica'
+  | 'verdadero_falso'
+  | 'verdadero_falso_justificado'
   | 'texto_abierto'
   | 'relacionar_columnas'
   | 'grafico_esquema'
-  | 'calculo';
+  | 'calculo'
+  | 'opcion_multiple'; // retrocompatibilidad
 
 /**
  * Modelo para las opciones de respuesta y criterios en la rúbrica
@@ -22,8 +25,10 @@ export interface ItemRubrica {
   numero_pregunta: number;
   tipo_pregunta: TipoPregunta;
   tipo?: string; // Retrocompatibilidad
-  opciones_validas?: string[]; // ej. ['A', 'B', 'C', 'D', 'E'] para opción múltiple
-  respuesta_correcta: string; // Para opción múltiple: 'A', 'B', etc. Para el resto: Criterio de Evaluación / Respuesta Esperada amplia
+  cantidad_alternativas?: number; // Usado para 'opcion_multiple_dinamica' (ej. 2 a 5 o más)
+  opciones_validas?: string[]; // ej. ['A', 'B', 'C', 'D', 'E']
+  respuesta_correcta: string; // Para opción múltiple: 'A', 'B'... Para V/F: 'V' o 'F'... Para abierta: Criterio/Respuesta esperada
+  respuesta_esperada_texto?: string; // Criterio de Justificación Esperada (ej. si V/F justificado es 'F')
   puntaje: number;
   penalidad_error?: number;
 }

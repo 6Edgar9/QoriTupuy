@@ -51,13 +51,18 @@ const SYSTEM_PROMPT = `
 Eres "QoriTupuy AI", un evaluador universitario experto y riguroso en visión computacional multimodal, análisis caligráfico y razonamiento científico para exámenes manuscritos.
 Tu misión es transcribir, interpretar y calificar con máxima precisión las respuestas marcadas, redactadas, calculadas o dibujadas por los estudiantes en la hoja de examen escaneada, contrastándolas contra la RÚBRICA OFICIAL MULTIMODAL.
 
-REGLAS DE EVALUACIÓN MULTIMODAL:
+REGLAS DE EVALUACIÓN SEGÚN EL TIPO DE PREGUNTA:
 1. DETECCIÓN DE IDENTIDAD:
    - Extrae el Nombre y Apellidos completos del estudiante detectados en el encabezado.
    - Si existe un campo para Código de Alumno, DNI o Matrícula, extráelo con precisión.
 
-2. EVALUACIÓN SEGÚN EL TIPO DE PREGUNTA:
-   - 'opcion_multiple': Identifica qué letra (A, B, C, D, E) o casilla rellenó o marcó el estudiante con bolígrafo/lápiz (cruces, círculos, rellenos o tachaduras). Si marcó dos y tachó una, determina cuál dejó válida.
+2. EVALUACIÓN ESPECÍFICA POR TIPO:
+   - 'opcion_multiple_dinamica' (u 'opcion_multiple'): Busca la marca del alumno solo entre las X alternativas permitidas (indicadas en cantidad_alternativas u opciones_validas, ej. A, B, C...). Identifica qué letra rellenó, marcó o circuló el estudiante. Si marcó dos y tachó una, determina cuál dejó válida.
+   - 'verdadero_falso': Busca marcas como V/F, Verdadero/Falso, T/F o checks/cruces en las casillas correspondientes. Compara directamente con la clave (V o F).
+   - 'verdadero_falso_justificado': Primero verifica si el alumno marcó V o F.
+       * Si la clave correcta es V y el alumno marcó V: Asigna el puntaje total (no requiere justificación).
+       * Si la clave correcta era Falso (F), el alumno DEBE haber marcado F y además DEBE haber escrito una corrección manuscrita. Transcribe mentalmente esa caligrafía manuscrita y compárala semánticamente con el "Criterio de Justificación Esperada" de la rúbrica.
+       * Calcula puntaje parcial (ej. 50% de los puntos) si marcó Falso pero omitió o justificó incorrectamente la corrección, o puntaje total (100%) si ambas partes (marca F y justificación escrita) son correctas. Si marcó Verdadero siendo Falso, asigna 0 puntos.
    - 'texto_abierto' o 'calculo': Transcribe mentalmente la caligrafía manuscrita del estudiante y compárala semánticamente contra el Criterio de Evaluación de la rúbrica. En cálculos matemáticos, revisa tanto el procedimiento numérico como el resultado final.
    - 'relacionar_columnas' o 'grafico_esquema': Inspecciona visualmente las líneas de conexión, flechas, diagramas o palabras escritas en recuadros del examen y valida si coinciden con la rúbrica esperada.
    - Asigna el puntaje total o parcial (de 0 al puntaje máximo indicado para cada pregunta) según el nivel de acierto, y siempre incluye una justificación breve y clara de por qué asignaste ese puntaje en el campo "justificacion".
@@ -67,7 +72,7 @@ REGLAS DE EVALUACIÓN MULTIMODAL:
    - confianza_pregunta: asígnale de 0 a 100 según la nitidez visual y certidumbre caligráfica de cada respuesta.
    - confianza_lectura global: calcula un promedio ponderado de la legibilidad general del examen.
    - Si la caligrafía es borrosa, ilegible, hay borrones severos o trazos ambiguos que impidan una evaluación certera, asigna una confianza < 75 para esa pregunta y refleja esa incertidumbre en confianza_lectura global.
-   - Si la confianza global es inferior a 85, marca "requiere_revision_humana: true" y detalla en "motivo_revision_manual" la razón (ej. "Caligrafía difusa en desarrollo de P3", "Borrones en esquema de P4").
+   - Si la confianza global es inferior a 85, marca "requiere_revision_humana: true" y detalla en "motivo_revision_manual" la razón (ej. "Caligrafía difusa en justificación de P2", "Borrones en esquema de P4").
 
 4. FORMATO DE SALIDA ESTRICTO:
    - Responde EXCLUSIVAMENTE con el objeto JSON estructurado según el esquema solicitado. No agregues texto fuera del JSON.
@@ -105,7 +110,7 @@ const responseSchema: Schema = {
           numero_pregunta: { type: Type.INTEGER },
           respuesta_detectada: {
             type: Type.STRING,
-            description: 'Opción marcada ("A", "B"...), transcripción del texto manuscrito o descripción del esquema detectado',
+            description: 'Opción marcada ("A", "B", "V", "F"...), transcripción del texto manuscrito o descripción de lo detectado',
           },
           puntaje_asignado: {
             type: Type.NUMBER,
@@ -163,21 +168,27 @@ export async function calificarExamenConGemini(
     ? imageBuffer.toString('base64')
     : Buffer.from(imageBuffer).toString('base64');
 
-  const rubricaFormateada = rubrica.map((item) => ({
-    numero_pregunta: item.numero_pregunta,
-    tipo_pregunta: item.tipo_pregunta || item.tipo || 'opcion_multiple',
-    criterio_o_respuesta_correcta: item.respuesta_correcta,
-    puntaje_maximo: item.puntaje,
-    penalidad_error: item.penalidad_error || 0,
-  }));
+  const rubricaFormateada = rubrica.map((item) => {
+    const tipoNormalizado = item.tipo_pregunta || item.tipo || 'opcion_multiple_dinamica';
+    return {
+      numero_pregunta: item.numero_pregunta,
+      tipo_pregunta: tipoNormalizado,
+      cantidad_alternativas: item.cantidad_alternativas,
+      opciones_validas: item.opciones_validas,
+      clave_o_criterio: item.respuesta_correcta,
+      criterio_justificacion_si_falso: item.respuesta_esperada_texto,
+      puntaje_maximo: item.puntaje,
+      penalidad_error: item.penalidad_error || 0,
+    };
+  });
 
   const userPrompt = `
-Por favor, analiza y califica visualmente el examen adjunto contrastándolo contra esta RÚBRICA MULTIMODAL:
+Por favor, analiza y califica visualmente el examen adjunto contrastándolo contra esta RÚBRICA MULTIMODAL AVANZADA:
 
 ${JSON.stringify(rubricaFormateada, null, 2)}
 
 Total de preguntas a evaluar: ${rubrica.length}.
-Para cada pregunta, evalúa la caligrafía, transcripción, cálculo, conexiones o marcas y asigna el puntaje con su respectiva justificación.
+Para cada pregunta, evalúa la caligrafía, transcripción, opciones dinámicas, marcas V/F, justificaciones manuscritas, cálculos, conexiones o marcas y asigna el puntaje con su respectiva justificación.
 `;
 
   try {
@@ -222,13 +233,13 @@ Para cada pregunta, evalúa la caligrafía, transcripción, cálculo, conexiones
         (d) => d.numero_pregunta === itemRubrica.numero_pregunta
       );
 
-      const tipoPregunta = (itemRubrica.tipo_pregunta || itemRubrica.tipo || 'opcion_multiple') as TipoPregunta;
+      const tipoPregunta = (itemRubrica.tipo_pregunta || itemRubrica.tipo || 'opcion_multiple_dinamica') as TipoPregunta;
       const respuestaDetectada = detectado?.respuesta_detectada?.trim() || 'NO_RESPONDIDA';
 
       let puntajeObtenido = 0;
       let esCorrecta = false;
 
-      if (tipoPregunta === 'opcion_multiple') {
+      if (tipoPregunta === 'opcion_multiple_dinamica' || (tipoPregunta as any) === 'opcion_multiple') {
         const respUpper = respuestaDetectada.toUpperCase();
         const claveUpper = itemRubrica.respuesta_correcta.toUpperCase().trim();
         esCorrecta = respUpper === claveUpper;
@@ -238,8 +249,19 @@ Para cada pregunta, evalúa la caligrafía, transcripción, cálculo, conexiones
         } else if (itemRubrica.penalidad_error && respUpper !== 'NO_RESPONDIDA') {
           puntajeObtenido = -Math.abs(itemRubrica.penalidad_error);
         }
+      } else if (tipoPregunta === 'verdadero_falso') {
+        // Normalizar respuestas V/F
+        const respNorm = respuestaDetectada.toUpperCase().startsWith('V') || respuestaDetectada.toUpperCase().startsWith('T') ? 'V' :
+                         respuestaDetectada.toUpperCase().startsWith('F') ? 'F' : respuestaDetectada.toUpperCase();
+        const claveNorm = itemRubrica.respuesta_correcta.toUpperCase().trim();
+        esCorrecta = respNorm === claveNorm;
+        if (esCorrecta) {
+          puntajeObtenido = itemRubrica.puntaje;
+        } else if (itemRubrica.penalidad_error && respNorm !== 'NO_RESPONDIDA') {
+          puntajeObtenido = -Math.abs(itemRubrica.penalidad_error);
+        }
       } else {
-        // Para preguntas multimodales abiertas, cálculo, columnas y esquemas:
+        // Para verdadero_falso_justificado, texto abierto, cálculo, columnas y esquemas:
         // Tomamos el puntaje_asignado por Gemini, acotándolo estrictamente entre 0 y el máximo de la pregunta
         const puntajeIA = typeof detectado?.puntaje_asignado === 'number' ? detectado.puntaje_asignado : 0;
         puntajeObtenido = Math.min(itemRubrica.puntaje, Math.max(0, Number(puntajeIA.toFixed(2))));
@@ -252,7 +274,7 @@ Para cada pregunta, evalúa la caligrafía, transcripción, cálculo, conexiones
         numero_pregunta: itemRubrica.numero_pregunta,
         tipo_pregunta: tipoPregunta,
         respuesta_detectada: respuestaDetectada,
-        respuesta_correcta: itemRubrica.respuesta_correcta,
+        respuesta_correcta: itemRubrica.respuesta_correcta + (itemRubrica.respuesta_esperada_texto ? ` (Justificación: ${itemRubrica.respuesta_esperada_texto})` : ''),
         es_correcta: esCorrecta,
         puntaje_obtenido: puntajeObtenido,
         confianza_item: detectado?.confianza_pregunta ?? 50,

@@ -136,9 +136,10 @@ export default function GestionCursosPage() {
     const cant = Math.max(1, Math.min(50, totalPreguntas));
     const items: ItemRubrica[] = Array.from({ length: cant }, (_, i) => ({
       numero_pregunta: i + 1,
-      tipo_pregunta: 'opcion_multiple',
-      tipo: 'opcion_multiple',
-      opciones_validas: ['A', 'B', 'C', 'D', 'E'],
+      tipo_pregunta: 'opcion_multiple_dinamica',
+      tipo: 'opcion_multiple_dinamica',
+      cantidad_alternativas: 4,
+      opciones_validas: ['A', 'B', 'C', 'D'],
       respuesta_correcta: 'A',
       puntaje: Number((20 / cant).toFixed(2)),
       penalidad_error: 0,
