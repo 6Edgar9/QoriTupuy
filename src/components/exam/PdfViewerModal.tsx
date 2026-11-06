@@ -10,7 +10,7 @@ interface PdfViewerModalProps {
   studentName?: string;
   grade?: number;
   maxGrade?: number;
-  confidence?: number;
+  confidence?: number | boolean;
 }
 
 export default function PdfViewerModal({
@@ -68,12 +68,16 @@ export default function PdfViewerModal({
                 {confidence !== undefined && (
                   <span
                     className={`inline-flex items-center px-2 py-0.5 rounded font-semibold ${
-                      confidence >= 85
+                      confidence === true || (typeof confidence === 'number' && confidence >= 85)
                         ? 'bg-emerald-100 text-emerald-800'
                         : 'bg-amber-100 text-amber-800'
                     }`}
                   >
-                    Confianza: {confidence}%
+                    {typeof confidence === 'boolean'
+                      ? confidence
+                        ? 'Lectura Confiable'
+                        : 'Requiere Revisión'
+                      : `Confianza: ${confidence}%`}
                   </span>
                 )}
               </div>

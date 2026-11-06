@@ -56,11 +56,13 @@ model ExamenAlumno {
   nombre                 String
   nota_total             Float
   nota_maxima            Float       @default(20)
-  confianza_lectura      Float
+  confianza_lectura      Boolean     @default(true)
   estado_revision        String      @default("aprobado_ia") // 'aprobado_ia' | 'requiere_revision_manual' | 'corregido_manual'
   url_pdf                String
   ruta_storage_pdf       String
   desglose_json          String      // Formato JSON serializado de DesglosePregunta[]
+  detalle_respuestas     String?     // Formato JSON serializado con estado de cada pregunta (correcta/incorrecta)
+  url_pdf_feedback       String?     // Ruta del archivo PDF con las marcas rojas de retroalimentación
   motivo_revision_manual String?
   revisado_por           String?
   creado_el              DateTime    @default(now())

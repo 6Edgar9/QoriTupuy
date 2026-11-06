@@ -1,12 +1,89 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import { prisma } from '@/lib/prisma';
 import { calificarExamenConGemini } from '@/lib/gemini/grader';
 import { EstadoRevision, ItemRubrica, DesglosePregunta } from '@/types/database';
 
 export const maxDuration = 300; // Permite procesamiento por lotes prolongado
+
+/**
+ * Genera un PDF de retroalimentación estampando la nota en rojo en la esquina superior derecha
+ * y agregando un resumen de aciertos y fallos en el encabezado.
+ */
+async function generarPdfRetroalimentacion(
+  pagePdfBytes: Uint8Array,
+  notaTotal: number,
+  notaMaxima: number,
+  desglose: DesglosePregunta[],
+  nombreAlumno: string
+): Promise<Buffer> {
+  const doc = await PDFDocument.load(pagePdfBytes);
+  const pages = doc.getPages();
+  const firstPage = pages[0];
+  const { width, height } = firstPage.getSize();
+
+  const helveticaBold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const helvetica = await doc.embedFont(StandardFonts.Helvetica);
+
+  // 1. Sello de Nota en color rojo en la parte superior derecha
+  const notaTexto = `NOTA: ${notaTotal}/${notaMaxima}`;
+  const fontSizeNota = 20;
+  const textWidth = helveticaBold.widthOfTextAtSize(notaTexto, fontSizeNota);
+  const stampX = Math.max(20, width - textWidth - 25);
+  const stampY = height - 38;
+
+  // Fondo del recuadro
+  firstPage.drawRectangle({
+    x: stampX - 8,
+    y: stampY - 5,
+    width: textWidth + 16,
+    height: 28,
+    color: rgb(1, 0.93, 0.93),
+    borderColor: rgb(0.85, 0.1, 0.1),
+    borderWidth: 1.5,
+  });
+
+  // Texto de la nota en rojo
+  firstPage.drawText(notaTexto, {
+    x: stampX,
+    y: stampY,
+    size: fontSizeNota,
+    font: helveticaBold,
+    color: rgb(0.85, 0.1, 0.1),
+  });
+
+  // 2. Resumen de preguntas falladas en el encabezado izquierdo
+  const falladas = desglose.filter((d) => !d.es_correcta);
+  const textoFeedback =
+    falladas.length > 0
+      ? `Falló Pregunta(s): ${falladas.map((f) => `P${f.numero_pregunta}`).join(', ')}`
+      : '¡Todas las preguntas respondidas correctamente!';
+
+  firstPage.drawText(textoFeedback, {
+    x: 25,
+    y: height - 32,
+    size: 10,
+    font: helveticaBold,
+    color: falladas.length > 0 ? rgb(0.85, 0.1, 0.1) : rgb(0.1, 0.6, 0.2),
+  });
+
+  // 3. Pie de página institucional
+  firstPage.drawText(
+    `QoriTupuy Feedback Docente | Alumno: ${nombreAlumno} | Calificado con Gemini AI`,
+    {
+      x: 25,
+      y: 12,
+      size: 8,
+      font: helvetica,
+      color: rgb(0.45, 0.45, 0.45),
+    }
+  );
+
+  const modifiedBytes = await doc.save();
+  return Buffer.from(modifiedBytes);
+}
 
 /**
  * Carga el buffer del PDF desde el disco local o desde URL local/remota
@@ -52,6 +129,7 @@ export async function POST(req: NextRequest) {
     let filePath = '';
     let storagePath = '';
     let directBuffer: Buffer | null = null;
+    let generarFeedback = true;
 
     const contentType = req.headers.get('content-type') || '';
 
@@ -63,6 +141,8 @@ export async function POST(req: NextRequest) {
       urlPdf = body.urlPdf;
       filePath = body.filePath || '';
       storagePath = body.storagePath || body.urlPdf || '';
+      if (body.generarFeedback !== undefined) generarFeedback = Boolean(body.generarFeedback);
+      if (body.generar_feedback !== undefined) generarFeedback = Boolean(body.generar_feedback);
     } else if (contentType.includes('multipart/form-data')) {
       const formData = await req.formData();
       cursoId = (formData.get('cursoId') as string) || '';
@@ -71,6 +151,8 @@ export async function POST(req: NextRequest) {
       urlPdf = (formData.get('urlPdf') as string) || '';
       filePath = (formData.get('filePath') as string) || '';
       storagePath = (formData.get('storagePath') as string) || '';
+      if (formData.has('generarFeedback')) generarFeedback = formData.get('generarFeedback') === 'true';
+      if (formData.has('generar_feedback')) generarFeedback = formData.get('generar_feedback') === 'true';
 
       const file = formData.get('file') as File | null;
       if (file) {
@@ -146,77 +228,154 @@ export async function POST(req: NextRequest) {
     console.log(`📑 PDF cargado con éxito. Total de páginas detectadas: ${pageCount}`);
 
     const uploadsDir = path.join(process.cwd(), 'public', 'uploads');
-    if (!fs.existsSync(uploadsDir)) {
-      fs.mkdirSync(uploadsDir, { recursive: true });
-    }
+    const examenesDir = path.join(uploadsDir, 'examenes');
+    const feedbackDir = path.join(uploadsDir, 'feedback');
+    if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+    if (!fs.existsSync(examenesDir)) fs.mkdirSync(examenesDir, { recursive: true });
+    if (!fs.existsSync(feedbackDir)) fs.mkdirSync(feedbackDir, { recursive: true });
 
     const timePrefix = Date.now();
     const examenesCreados: any[] = [];
+    const pageIndices = Array.from({ length: pageCount }, (_, idx) => idx);
 
     // 6. Procesamiento por Lotes Secuencial (1 página = 1 examen de alumno)
-    // Se ejecuta de manera secuencial (for...of) para evitar saturación de cuota y errores 503/429 en Gemini
-    for (let pageIdx = 0; pageIdx < pageCount; pageIdx++) {
-      console.log(`🔍 [Lote] Procesando página ${pageIdx + 1} de ${pageCount}...`);
+    // Se itera secuencialmente con for...of y await (CERO uso de Promise.all) para evitar errores SQLITE_BUSY y 503 de Gemini
+    try {
+      for (const pageIdx of pageIndices) {
+        let singlePageFilePath: string | null = null;
+        try {
+          console.log(`🔍 [Lote Secuencial] Procesando página ${pageIdx + 1} de ${pageCount}...`);
 
-      // Crear un PDF independiente de 1 página
-      const singlePageDoc = await PDFDocument.create();
-      const [copiedPage] = await singlePageDoc.copyPages(pdfDoc, [pageIdx]);
-      singlePageDoc.addPage(copiedPage);
+          // Crear un PDF independiente de 1 página
+          const singlePageDoc = await PDFDocument.create();
+          const [copiedPage] = await singlePageDoc.copyPages(pdfDoc, [pageIdx]);
+          singlePageDoc.addPage(copiedPage);
 
-      const singlePdfBytes = await singlePageDoc.save();
-      const singlePdfBuffer = Buffer.from(singlePdfBytes);
+          const singlePdfBytes = await singlePageDoc.save();
+          const singlePdfBuffer = Buffer.from(singlePdfBytes);
 
-      // Guardar el archivo PDF individual en disco local
-      const pageFileName = `examen_${timePrefix}_p${pageIdx + 1}.pdf`;
-      const pageFilePath = path.join(uploadsDir, pageFileName);
-      const pagePublicUrl = `/uploads/${pageFileName}`;
-      fs.writeFileSync(pageFilePath, singlePdfBuffer);
+          // Guardar permanentemente la página individual del alumno
+          const pageExamFileName = `examen_${timePrefix}_p${pageIdx + 1}.pdf`;
+          const pageExamFilePath = path.join(examenesDir, pageExamFileName);
+          fs.writeFileSync(pageExamFilePath, singlePdfBuffer);
+          const studentUrlPdf = `/uploads/examenes/${pageExamFileName}`;
 
-      // Calificar la página con Gemini Multimodal
-      console.log(`🤖 [Lote] Evaluando página ${pageIdx + 1}/${pageCount} con Gemini...`);
-      const resultadoIA = await calificarExamenConGemini(
-        singlePdfBuffer,
-        'application/pdf',
-        rubrica
-      );
+          // Archivo temporal para calificar
+          const pageFileName = `temp_examen_${timePrefix}_p${pageIdx + 1}.pdf`;
+          singlePageFilePath = path.join(uploadsDir, pageFileName);
+          fs.writeFileSync(singlePageFilePath, singlePdfBuffer);
 
-      // Determinar estado de revisión según confianza de lectura (umbral >= 85)
-      const estadoRevision: EstadoRevision =
-        resultadoIA.confianza_lectura >= 85 && !resultadoIA.requiere_revision_humana
-          ? 'aprobado_ia'
-          : 'requiere_revision_manual';
+          // Calificar la página con Gemini Multimodal
+          console.log(`🤖 [Lote] Evaluando página ${pageIdx + 1}/${pageCount} con Gemini...`);
+          const resultadoIA = await calificarExamenConGemini(
+            singlePdfBuffer,
+            'application/pdf',
+            rubrica
+          );
 
-      const desgloseSanitizado: DesglosePregunta[] = (resultadoIA.desglose_json || []).map((item) => ({
-        ...item,
-        justificacion: item.justificacion || '',
-        observaciones: item.observaciones || '',
-      }));
+          // Determinar estado de revisión según confianza de lectura (boolean)
+          const estadoRevision: EstadoRevision =
+            resultadoIA.confianza_lectura && !resultadoIA.requiere_revision_humana
+              ? 'aprobado_ia'
+              : 'requiere_revision_manual';
 
-      // Persistir examen en SQLite con Prisma
-      const nuevoExamen = await prisma.examenAlumno.create({
-        data: {
-          seccion_id: seccionId,
-          evaluacion_id: evaluacionId,
-          curso_id: cursoId,
-          codigo_alumno: resultadoIA.codigo_alumno || '',
-          nombre: resultadoIA.nombre_detectado || `Alumno Pág ${pageIdx + 1}`,
-          nota_total: resultadoIA.nota_total,
-          nota_maxima: resultadoIA.nota_maxima || 20,
-          confianza_lectura: resultadoIA.confianza_lectura,
-          estado_revision: estadoRevision,
-          url_pdf: pagePublicUrl,
-          ruta_storage_pdf: pagePublicUrl,
-          desglose_json: JSON.stringify(desgloseSanitizado),
-          motivo_revision_manual: resultadoIA.motivo_revision_manual || '',
-        },
-      });
+          const desgloseSanitizado: DesglosePregunta[] = (resultadoIA.desglose_json || []).map((item) => ({
+            ...item,
+            justificacion: item.justificacion || '',
+            observaciones: item.observaciones || '',
+          }));
 
-      console.log(`✅ [Lote] Examen guardado en SQLite (ID: ${nuevoExamen.id}, Alumno: ${nuevoExamen.nombre}, Nota: ${nuevoExamen.nota_total})`);
+          // Generar PDF con feedback visual de marcas rojas si está solicitado
+          let urlPdfFeedback: string | null = null;
+          if (generarFeedback) {
+            try {
+              console.log(`📝 [Feedback] Generando PDF con marcas visuales para página ${pageIdx + 1}...`);
+              const feedbackBuffer = await generarPdfRetroalimentacion(
+                singlePdfBytes,
+                resultadoIA.confianza_lectura ? resultadoIA.nota_total : 0,
+                resultadoIA.nota_maxima || 20,
+                desgloseSanitizado,
+                resultadoIA.nombre_detectado || `Alumno Pág ${pageIdx + 1}`
+              );
+              const feedbackFileName = `feedback_${timePrefix}_p${pageIdx + 1}.pdf`;
+              const feedbackFilePath = path.join(feedbackDir, feedbackFileName);
+              fs.writeFileSync(feedbackFilePath, feedbackBuffer);
+              urlPdfFeedback = `/uploads/feedback/${feedbackFileName}`;
+            } catch (feedErr) {
+              console.warn(`⚠️ No se pudo generar PDF de feedback para página ${pageIdx + 1}:`, feedErr);
+            }
+          }
 
-      examenesCreados.push({
-        ...nuevoExamen,
-        desglose_json: desgloseSanitizado,
-      });
+          // Estructurar detalle_respuestas para el dashboard de analíticas
+          const detalleRespuestas = desgloseSanitizado.map((item) => ({
+            numero_pregunta: item.numero_pregunta,
+            es_correcta: item.es_correcta,
+            puntaje_obtenido: item.puntaje_obtenido,
+            respuesta_detectada: item.respuesta_detectada,
+            respuesta_correcta: item.respuesta_correcta,
+          }));
+
+          // Persistir examen en SQLite con Prisma de forma secuencial
+          const nuevoExamen = await prisma.examenAlumno.create({
+            data: {
+              seccion_id: seccionId,
+              evaluacion_id: evaluacionId,
+              curso_id: cursoId,
+              codigo_alumno: resultadoIA.codigo_alumno || '',
+              nombre: resultadoIA.nombre_detectado || `Alumno Pág ${pageIdx + 1}`,
+              nota_total: resultadoIA.confianza_lectura ? resultadoIA.nota_total : 0,
+              nota_maxima: resultadoIA.nota_maxima || 20,
+              confianza_lectura: resultadoIA.confianza_lectura,
+              estado_revision: estadoRevision,
+              url_pdf: studentUrlPdf,
+              ruta_storage_pdf: pageExamFilePath,
+              desglose_json: JSON.stringify(desgloseSanitizado),
+              detalle_respuestas: JSON.stringify(detalleRespuestas),
+              url_pdf_feedback: urlPdfFeedback,
+              motivo_revision_manual: resultadoIA.motivo_revision_manual || '',
+            },
+          });
+
+          console.log(`✅ [Lote] Examen guardado en SQLite (ID: ${nuevoExamen.id}, Alumno: ${nuevoExamen.nombre}, Feedback: ${Boolean(urlPdfFeedback)})`);
+
+          examenesCreados.push({
+            ...nuevoExamen,
+            desglose_json: desgloseSanitizado,
+            detalle_respuestas: detalleRespuestas,
+          });
+        } catch (pageError: any) {
+          console.error(`❌ Error evaluando página ${pageIdx + 1} de ${pageCount}:`, pageError);
+          throw pageError;
+        } finally {
+          // Prevención de Fuga de Memoria: eliminar físicamente el archivo PDF temporal de esa página
+          if (singlePageFilePath && fs.existsSync(singlePageFilePath)) {
+            try {
+              fs.unlinkSync(singlePageFilePath);
+              console.log(`🧹 Archivo temporal de página eliminado: ${singlePageFilePath}`);
+            } catch (unlinkErr) {
+              console.warn(`No se pudo eliminar archivo temporal ${singlePageFilePath}:`, unlinkErr);
+            }
+          }
+        }
+      }
+    } finally {
+      // Prevención de Fuga de Memoria: Al terminar el bucle completo, eliminar el PDF original de public/uploads/
+      const possibleOriginalPaths = [
+        filePath,
+        urlPdf && urlPdf.startsWith('/uploads/') ? path.join(process.cwd(), 'public', urlPdf) : null,
+        urlPdf ? path.join(uploadsDir, path.basename(urlPdf)) : null,
+      ].filter(Boolean) as string[];
+
+      for (const p of possibleOriginalPaths) {
+        if (fs.existsSync(p)) {
+          try {
+            fs.unlinkSync(p);
+            console.log(`🗑️ PDF original eliminado de disco para liberar espacio: ${p}`);
+          } catch (origUnlinkErr) {
+            console.warn(`No se pudo eliminar PDF original ${p}:`, origUnlinkErr);
+          }
+        }
+      }
     }
 
     const duracionMs = Date.now() - startTime;

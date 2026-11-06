@@ -25,6 +25,7 @@ export default function PdfDropzone({
   const [uploadState, setUploadState] = useState<UploadState>('idle');
   const [progressPercent, setProgressPercent] = useState<number>(0);
   const [currentFile, setCurrentFile] = useState<File | null>(null);
+  const [generarFeedback, setGenerarFeedback] = useState<boolean>(true);
   const [statusMessage, setStatusMessage] = useState<string>('');
   const [lastExamResult, setLastExamResult] = useState<ExamenAlumno | null>(null);
 
@@ -102,6 +103,7 @@ export default function PdfDropzone({
           urlPdf: uploadData.publicUrl,       // Ruta pública (ej: /uploads/archivo.pdf) para el visor iframe
           filePath: uploadData.absolutePath,  // Ruta absoluta en disco para lectura fs directa
           storagePath: uploadData.publicUrl,
+          generarFeedback,
         }),
       });
 
@@ -172,7 +174,34 @@ export default function PdfDropzone({
   };
 
   return (
-    <div className="w-full max-w-3xl mx-auto">
+    <div className="w-full max-w-3xl mx-auto space-y-3">
+      {/* Control Switch: Generar PDF de Retroalimentación */}
+      <div className="flex items-center justify-between px-4 py-2.5 bg-white border border-slate-200 rounded-xl shadow-xs">
+        <div className="flex items-center gap-2.5">
+          <div className="p-1.5 bg-rose-100 text-rose-700 rounded-lg">
+            <FileText className="w-4 h-4" />
+          </div>
+          <div>
+            <span className="text-xs font-bold text-slate-800">
+              Generar PDF de Retroalimentación (Marcas Rojas)
+            </span>
+            <p className="text-[11px] text-slate-500">
+              Estampa la nota final y preguntas falladas en el PDF usando pdf-lib
+            </p>
+          </div>
+        </div>
+
+        <label className="relative inline-flex items-center cursor-pointer">
+          <input
+            type="checkbox"
+            checked={generarFeedback}
+            onChange={(e) => setGenerarFeedback(e.target.checked)}
+            className="sr-only peer"
+          />
+          <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-rose-600"></div>
+        </label>
+      </div>
+
       <div
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -260,7 +289,7 @@ export default function PdfDropzone({
               <p className="text-base font-bold text-emerald-800">¡Calificación Completada!</p>
               <p className="text-sm text-slate-700 mt-1">{statusMessage}</p>
               <div className="mt-3 inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800">
-                Confianza de lectura: {lastExamResult.confianza_lectura}%
+                {lastExamResult.confianza_lectura ? 'Lectura Confiable' : 'Requiere Revisión Docente'}
               </div>
             </div>
             <button

@@ -19,18 +19,18 @@ export async function GET(req: NextRequest) {
       seccion_id: seccionId,
     };
 
-    if (tipo === 'aprobados') {
-      whereClause.confianza_lectura = { gte: 85 };
-    } else if (tipo === 'revision') {
-      whereClause.confianza_lectura = { lt: 85 };
+    if (tipo === 'aprobados' || tipo === 'confiables') {
+      whereClause.confianza_lectura = true;
+    } else if (tipo === 'revision' || tipo === 'urgente') {
+      whereClause.confianza_lectura = false;
     }
 
     const examenes = await prisma.examenAlumno.findMany({
       where: whereClause,
       orderBy:
-        tipo === 'aprobados'
+        tipo === 'aprobados' || tipo === 'confiables'
           ? [{ nombre: 'asc' }]
-          : [{ confianza_lectura: 'asc' }],
+          : [{ creado_el: 'desc' }],
     });
 
     const parsedExamenes = examenes.map((ex: any) => {
@@ -43,9 +43,21 @@ export async function GET(req: NextRequest) {
       } catch (e) {
         desglose_json = [];
       }
+
+      let detalle_respuestas = [];
+      try {
+        detalle_respuestas =
+          typeof ex.detalle_respuestas === 'string'
+            ? JSON.parse(ex.detalle_respuestas)
+            : ex.detalle_respuestas || [];
+      } catch (e) {
+        detalle_respuestas = [];
+      }
+
       return {
         ...ex,
         desglose_json,
+        detalle_respuestas,
       };
     });
 
@@ -62,7 +74,7 @@ export async function GET(req: NextRequest) {
 export async function PUT(req: NextRequest) {
   try {
     const body = await req.json();
-    const { id, nota_total, estado_revision, motivo_revision_manual, revisado_por } = body;
+    const { id, nota_total, estado_revision, motivo_revision_manual, revisado_por, confianza_lectura } = body;
 
     if (!id) {
       return NextResponse.json(
@@ -78,6 +90,7 @@ export async function PUT(req: NextRequest) {
         ...(estado_revision && { estado_revision }),
         ...(motivo_revision_manual !== undefined && { motivo_revision_manual }),
         ...(revisado_por !== undefined && { revisado_por }),
+        ...(confianza_lectura !== undefined && { confianza_lectura: Boolean(confianza_lectura) }),
       },
     });
 

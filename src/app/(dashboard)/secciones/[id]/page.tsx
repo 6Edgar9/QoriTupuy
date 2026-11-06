@@ -116,12 +116,12 @@ export default function SeccionDashboardPage({ params }: PageProps) {
                 <div className="flex items-center gap-2">
                   <span
                     className={`px-2 py-0.5 rounded-full font-semibold ${
-                      item.confianza_lectura >= 85
+                      Boolean(item.confianza_lectura)
                         ? 'bg-emerald-100 text-emerald-800'
                         : 'bg-red-100 text-red-800'
                     }`}
                   >
-                    Confianza: {item.confianza_lectura}%
+                    {Boolean(item.confianza_lectura) ? 'Confiable' : 'Revisión'}
                   </span>
                   <span className="capitalize text-slate-500">
                     {item.estado_revision.replace('_', ' ')}

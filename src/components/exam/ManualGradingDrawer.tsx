@@ -73,6 +73,7 @@ export default function ManualGradingDrawer({
           estado_revision: 'corregido_manual',
           motivo_revision_manual: motivoAjuste,
           revisado_por: revisorNombre,
+          confianza_lectura: true,
         }),
       });
 
@@ -84,6 +85,7 @@ export default function ManualGradingDrawer({
       const examenActualizado: ExamenAlumno = {
         ...examen,
         nota_total: notaNum,
+        confianza_lectura: true,
         estado_revision: 'corregido_manual',
         motivo_revision_manual: motivoAjuste,
         revisado_por: revisorNombre,
@@ -114,7 +116,7 @@ export default function ManualGradingDrawer({
                   Revisión Manual: {examen.nombre}
                 </h2>
                 <p className="text-xs text-amber-700 font-medium">
-                  Confianza de lectura IA: {examen.confianza_lectura}% (Bajo umbral)
+                  {examen.confianza_lectura ? 'Lectura Confiable' : 'Alerta: Requiere Revisión Docente'}
                 </p>
               </div>
             </div>

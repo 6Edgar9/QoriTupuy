@@ -100,6 +100,15 @@ export interface DesglosePregunta {
   observaciones?: string;
 }
 
+export interface DetalleRespuestaItem {
+  numero_pregunta: number;
+  es_correcta: boolean;
+  puntaje_obtenido: number;
+  puntaje_maximo?: number;
+  respuesta_detectada?: string;
+  respuesta_correcta?: string;
+}
+
 /**
  * 4. Modelo: Exámenes de Alumnos
  */
@@ -112,11 +121,13 @@ export interface ExamenAlumno {
   nombre: string;
   nota_total: number;
   nota_maxima: number;
-  confianza_lectura: number; // 0-100 calculado por visión multimodal
+  confianza_lectura: boolean; // true: lectura confiable; false: ilegible, blanco o corrupto
   estado_revision: EstadoRevision;
   url_pdf: string;
   ruta_storage_pdf: string;
   desglose_json: DesglosePregunta[];
+  detalle_respuestas?: DetalleRespuestaItem[] | string;
+  url_pdf_feedback?: string;
   motivo_revision_manual?: string;
   revisado_por?: string;
   creado_el: Date | string;
@@ -141,7 +152,8 @@ export interface GradeExamRequest {
 export interface GeminiGradeResult {
   nombre_alumno: string;
   codigo_alumno?: string;
-  confianza_lectura: number; // 0 a 100
+  confianza_lectura: boolean; // true si es legible, false si está en blanco o ilegible
+  motivo_revision_manual?: string;
   nota_total: number;
   requiere_revision_humana: boolean;
   motivo_alerta?: string;

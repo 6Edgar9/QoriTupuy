@@ -53,7 +53,7 @@ function getGeminiClient(): GoogleGenAI {
 export interface GeminiGraderOutput {
   nombre_detectado: string;
   codigo_alumno?: string;
-  confianza_lectura: number; // 0 - 100
+  confianza_lectura: boolean; // true si es legible, false si está en blanco o ilegible
   requiere_revision_humana: boolean;
   motivo_revision_manual?: string;
   desglose: {
@@ -75,7 +75,7 @@ export interface EvaluacionGradingResult {
   codigo_alumno?: string;
   nota_total: number;
   nota_maxima: number;
-  confianza_lectura: number;
+  confianza_lectura: boolean;
   requiere_revision_humana: boolean;
   motivo_revision_manual?: string;
   desglose_json: DesglosePregunta[];
@@ -109,11 +109,9 @@ REGLAS DE EVALUACIÓN SEGÚN EL TIPO DE PREGUNTA:
    - Asigna el puntaje total o parcial (de 0 al puntaje máximo indicado para cada pregunta) según el nivel de acierto, y siempre incluye una justificación breve y clara de por qué asignaste ese puntaje en el campo "justificacion".
    - Si no hay respuesta visible para una pregunta, marca respuesta_detectada como "NO_RESPONDIDA", asigna 0 puntos y anota la ausencia en la justificación.
 
-3. CÁLCULO DE CONFIANZA DE LECTURA (0 A 100):
-   - confianza_pregunta: asígnale de 0 a 100 según la nitidez visual y certidumbre caligráfica de cada respuesta.
-   - confianza_lectura global: calcula un promedio ponderado de la legibilidad general del examen.
-   - Si la caligrafía es borrosa, ilegible, hay borrones severos o trazos ambiguos que impidan una evaluación certera, asigna una confianza < 75 para esa pregunta y refleja esa incertidumbre en confianza_lectura global.
-   - Si la confianza global es inferior a 85, marca "requiere_revision_humana: true" y detalla en "motivo_revision_manual" la razón (ej. "Caligrafía difusa en rotulado de P3", "Borrones en ensayo de P5").
+3. REGLA ESTRICTA DE CONFIANZA DE LECTURA (confianza_lectura: boolean):
+   - Si el examen está completamente en blanco, la caligrafía es 100% ininteligible, el archivo está corrupto, o no puedes encontrar respuestas coherentes con la rúbrica, DEBES establecer confianza_lectura en false y explicar la razón en motivo_revision_manual. Si se puede leer y calificar normalmente, establece true.
+   - Si confianza_lectura es false, marca además requiere_revision_humana en true.
 
 4. FORMATO DE SALIDA ESTRICTO:
    - Responde EXCLUSIVAMENTE con el objeto JSON estructurado según el esquema solicitado. No agregues texto fuera del JSON.
@@ -131,16 +129,16 @@ const responseSchema: Schema = {
       description: 'Código de matrícula, DNI o identificador del estudiante. Si no existe o no se distingue, devolver estrictamente una cadena vacía ""',
     },
     confianza_lectura: {
-      type: Type.NUMBER,
-      description: 'Puntaje de certeza y legibilidad global del examen de 0 a 100',
+      type: Type.BOOLEAN,
+      description: 'Establecer en true si el examen se puede leer y calificar normalmente. Establecer en false si el examen está completamente en blanco, la caligrafía es 100% ininteligible, corrupto o incoherente con la rúbrica.',
     },
     requiere_revision_humana: {
       type: Type.BOOLEAN,
-      description: 'Verdadero si la confianza es < 85 o existen anomalías visuales graves',
+      description: 'Verdadero si confianza_lectura es false o existen anomalías visuales graves que requieran revisión humana',
     },
     motivo_revision_manual: {
       type: Type.STRING,
-      description: 'Explicación detallada en caso de requerir revisión manual. Si no requiere, devolver estrictamente una cadena vacía ""',
+      description: 'Explicación obligatoria y detallada si confianza_lectura es false o requiere revisión manual. Si se lee normalmente, devolver estrictamente una cadena vacía ""',
     },
     desglose: {
       type: Type.ARRAY,
@@ -399,16 +397,19 @@ Para cada pregunta, evalúa la caligrafía, transcripción, opciones dinámicas,
     });
 
     const notaFinalNormalizada = Math.max(0, Number(notaTotalCalculada.toFixed(2)));
-    let rawConfidence = typeof parsedData.confianza_lectura === 'number' ? parsedData.confianza_lectura : 0;
-    // Si la IA devolvió decimal en rango 0..1 (ej: 0.95), convertirlo a escala 0..100 (95)
-    if (rawConfidence > 0 && rawConfidence <= 1) {
-      rawConfidence = rawConfidence * 100;
+
+    // Determinar confianza de lectura como booleano estricto
+    let confianzaLectura = true;
+    if (typeof parsedData.confianza_lectura === 'boolean') {
+      confianzaLectura = parsedData.confianza_lectura;
+    } else if (typeof parsedData.confianza_lectura === 'number') {
+      confianzaLectura = parsedData.confianza_lectura >= 85;
     }
-    const confianzaLectura = Math.min(100, Math.max(0, Math.round(rawConfidence)));
-    const requiereRevision = confianzaLectura < 85 || parsedData.requiere_revision_humana;
+
+    const requiereRevision = !confianzaLectura || Boolean(parsedData.requiere_revision_humana);
 
     const motivoFinal = requiereRevision
-      ? parsedData.motivo_revision_manual?.trim() || `Nivel de confianza de lectura por debajo del umbral (${confianzaLectura}/100)`
+      ? parsedData.motivo_revision_manual?.trim() || (!confianzaLectura ? 'Examen en blanco, corrupto o caligrafía 100% ininteligible.' : 'Requiere revisión docente.')
       : '';
 
     return {
