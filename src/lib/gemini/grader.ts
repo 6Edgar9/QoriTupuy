@@ -1,13 +1,44 @@
 import { GoogleGenAI, Type, Schema } from '@google/genai';
 import { ItemRubrica, DesglosePregunta, TipoPregunta } from '@/types/database';
 
-// Modelos Gemini candidatos en orden de preferencia y resiliencia
-const GEMINI_MODELS = [
-  process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+// Modelos Gemini candidatos en orden de preferencia y resiliencia (con fallback a Flash)
+const PRIMARY_MODELS = [
+  process.env.GEMINI_MODEL || 'gemini-1.5-pro',
   'gemini-2.5-pro',
-  'gemini-1.5-pro',
+];
+
+const RESCUE_MODELS = [
+  'gemini-2.5-flash',
+  'gemini-1.5-flash',
   'gemini-flash-latest',
 ];
+
+// Helper para pausas asíncronas
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Función auxiliar para detectar si un error es transitorio (503 UNAVAILABLE o 429 RATE_LIMIT/QUOTA)
+ */
+function isTransientError(error: any): boolean {
+  if (!error) return false;
+  const msg = (error.message || '').toLowerCase();
+  const status = error.status || '';
+  const code = error.code || '';
+
+  return (
+    code === 503 ||
+    code === 429 ||
+    status === 'UNAVAILABLE' ||
+    status === 'RESOURCE_EXHAUSTED' ||
+    msg.includes('503') ||
+    msg.includes('429') ||
+    msg.includes('high demand') ||
+    msg.includes('unavailable') ||
+    msg.includes('resource_exhausted') ||
+    msg.includes('quota') ||
+    msg.includes('rate limit')
+  );
+}
 function getGeminiClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -93,11 +124,11 @@ const responseSchema: Schema = {
   properties: {
     nombre_detectado: {
       type: Type.STRING,
-      description: 'Nombre y apellidos completos del estudiante detectados en el encabezado',
+      description: 'Nombre y apellidos completos del estudiante detectados en el encabezado. Si no se encuentra, devolver "Alumno No Identificado"',
     },
     codigo_alumno: {
       type: Type.STRING,
-      description: 'Código de matrícula, DNI o identificador del estudiante',
+      description: 'Código de matrícula, DNI o identificador del estudiante. Si no existe o no se distingue, devolver estrictamente una cadena vacía ""',
     },
     confianza_lectura: {
       type: Type.NUMBER,
@@ -109,7 +140,7 @@ const responseSchema: Schema = {
     },
     motivo_revision_manual: {
       type: Type.STRING,
-      description: 'Explicación detallada en caso de requerir revisión manual por un docente',
+      description: 'Explicación detallada en caso de requerir revisión manual. Si no requiere, devolver estrictamente una cadena vacía ""',
     },
     desglose: {
       type: Type.ARRAY,
@@ -156,8 +187,10 @@ const responseSchema: Schema = {
   },
   required: [
     'nombre_detectado',
+    'codigo_alumno',
     'confianza_lectura',
     'requiere_revision_humana',
+    'motivo_revision_manual',
     'desglose',
   ],
 };
@@ -208,47 +241,90 @@ Para cada pregunta, evalúa la caligrafía, transcripción, opciones dinámicas,
     let lastError: Error | null = null;
     let parsedData: GeminiGraderOutput | null = null;
 
-    for (const modelName of GEMINI_MODELS) {
-      try {
-        const response = await ai.models.generateContent({
-          model: modelName,
-          contents: [
-            {
-              role: 'user',
-              parts: [
-                {
-                  inlineData: {
-                    mimeType,
-                    data: base64Data,
-                  },
-                },
-                {
-                  text: userPrompt,
-                },
-              ],
-            },
-          ],
-          config: {
-            systemInstruction: SYSTEM_PROMPT,
-            temperature: 0.1, // Determinismo y rigurosidad
-            responseMimeType: 'application/json',
-            responseSchema,
-          },
-        });
+    // Helper para intentar llamar a un modelo con hasta 3 reintentos y backoff exponencial (2s, 4s, 8s)
+    async function callWithExponentialBackoff(modelName: string): Promise<GeminiGraderOutput | null> {
+      const maxRetries = 3;
+      const delays = [2000, 4000, 8000];
 
-        const responseText = response.text?.trim() || '{}';
-        parsedData = JSON.parse(responseText);
-        if (parsedData && parsedData.nombre_detectado) {
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          console.log(`🤖 [Gemini Grader] Intentando evaluar con modelo "${modelName}" (Intento ${attempt + 1}/${maxRetries})...`);
+
+          const response = await ai.models.generateContent({
+            model: modelName,
+            contents: [
+              {
+                role: 'user',
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType,
+                      data: base64Data,
+                    },
+                  },
+                  {
+                    text: userPrompt,
+                  },
+                ],
+              },
+            ],
+            config: {
+              systemInstruction: SYSTEM_PROMPT,
+              temperature: 0.1, // Determinismo y rigurosidad
+              responseMimeType: 'application/json',
+              responseSchema,
+            },
+          });
+
+          const responseText = response.text?.trim() || '{}';
+          const parsed = JSON.parse(responseText);
+          if (parsed && typeof parsed.nombre_detectado !== 'undefined') {
+            console.log(`✅ [Gemini Grader] Evaluación exitosa con "${modelName}".`);
+            return parsed;
+          }
+        } catch (err: any) {
+          lastError = err as Error;
+          const isTransient = isTransientError(err);
+          console.warn(`⚠️ [Gemini Grader] Fallo en intento ${attempt + 1}/${maxRetries} con "${modelName}":`, err.message);
+
+          if (isTransient && attempt < maxRetries - 1) {
+            const delayMs = delays[attempt];
+            console.log(`⏳ [Backoff] Esperando ${delayMs / 1000}s antes de reintentar por saturación/cuota (503/429)...`);
+            await wait(delayMs);
+          } else if (!isTransient) {
+            // Si es un error definitivo no transitorio de este modelo (ej: 404 no disponible), saltar de inmediato al siguiente modelo
+            console.warn(`⏭️ [Gemini Grader] Error permanente para ${modelName}, evaluando alternativas...`);
+            break;
+          }
+        }
+      }
+      return null;
+    }
+
+    // 1. Probar primero los modelos principales (ej. gemini-1.5-pro / gemini-2.5-pro) con sus reintentos
+    for (const modelName of PRIMARY_MODELS) {
+      parsedData = await callWithExponentialBackoff(modelName);
+      if (parsedData) break;
+    }
+
+    // 2. Si fallaron o se saturaron los modelos principales, activar Fallback de Rescate con Flash (gemini-2.5-flash / gemini-1.5-flash)
+    if (!parsedData) {
+      console.warn('🚨 [Gemini Grader] Modelos Pro saturados o no disponibles. Activando Fallback de Rescate con modelos Flash...');
+      for (const rescueModel of RESCUE_MODELS) {
+        parsedData = await callWithExponentialBackoff(rescueModel);
+        if (parsedData) {
+          console.log(`🛡️ [Gemini Grader] Rescate exitoso completado con modelo Flash "${rescueModel}".`);
           break;
         }
-      } catch (err) {
-        console.warn(`Intento fallido con modelo ${modelName}:`, (err as Error).message);
-        lastError = err as Error;
       }
     }
 
     if (!parsedData) {
-      throw new Error(`Fallo en el servicio de calificación IA (todos los modelos agotados): ${lastError?.message || 'Sin respuesta'}`);
+      const errorMsg = (lastError as any)?.message || '';
+      if (isTransientError(lastError)) {
+        throw new Error('SERVICE_OVERLOADED: Los servidores de Inteligencia Artificial están experimentando una alta demanda global. Por favor, reintenta en unos instantes.');
+      }
+      throw new Error(`Fallo en el servicio de calificación IA (todos los modelos agotados): ${errorMsg || 'Sin respuesta'}`);
     }
 
     // Consolidar puntajes y desgloses
@@ -318,7 +394,7 @@ Para cada pregunta, evalúa la caligrafía, transcripción, opciones dinámicas,
         puntaje_obtenido: puntajeObtenido,
         confianza_item: confianzaItem,
         justificacion: detectado?.justificacion || '',
-        observaciones: detectado?.observaciones,
+        observaciones: detectado?.observaciones || '',
       };
     });
 
@@ -331,16 +407,18 @@ Para cada pregunta, evalúa la caligrafía, transcripción, opciones dinámicas,
     const confianzaLectura = Math.min(100, Math.max(0, Math.round(rawConfidence)));
     const requiereRevision = confianzaLectura < 85 || parsedData.requiere_revision_humana;
 
+    const motivoFinal = requiereRevision
+      ? parsedData.motivo_revision_manual?.trim() || `Nivel de confianza de lectura por debajo del umbral (${confianzaLectura}/100)`
+      : '';
+
     return {
       nombre_detectado: parsedData.nombre_detectado?.trim() || 'Alumno No Identificado',
-      codigo_alumno: parsedData.codigo_alumno?.trim() || undefined,
+      codigo_alumno: parsedData.codigo_alumno?.trim() || '',
       nota_total: notaFinalNormalizada,
       nota_maxima: notaMaximaPosible,
       confianza_lectura: confianzaLectura,
       requiere_revision_humana: requiereRevision,
-      motivo_revision_manual: requiereRevision
-        ? parsedData.motivo_revision_manual || `Nivel de confianza de lectura por debajo del umbral (${confianzaLectura}/100)`
-        : undefined,
+      motivo_revision_manual: motivoFinal,
       desglose_json: desgloseCompleto,
     };
   } catch (error) {

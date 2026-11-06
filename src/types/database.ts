@@ -1,5 +1,3 @@
-import { Timestamp } from 'firebase/firestore';
-
 /**
  * Estado de procesamiento y validación del examen
  */
@@ -50,8 +48,7 @@ export interface ItemRubrica {
 }
 
 /**
- * 1. Colección: Cursos
- * Ruta: /cursos/{cursoId}
+ * 1. Modelo: Cursos
  */
 export interface Curso {
   id?: string;
@@ -59,13 +56,12 @@ export interface Curso {
   nombre: string;          // ej. "Cálculo Multivariable"
   periodo: string;         // ej. "2026-II"
   profesor_id?: string;
-  creado_el: Timestamp | Date | string;
-  actualizado_el?: Timestamp | Date | string;
+  creado_el: Date | string;
+  actualizado_el?: Date | string;
 }
 
 /**
- * 2. Subcolección: Evaluaciones
- * Ruta: /cursos/{cursoId}/evaluaciones/{evaluacionId}
+ * 2. Modelo: Evaluaciones
  */
 export interface Evaluacion {
   id?: string;
@@ -73,12 +69,11 @@ export interface Evaluacion {
   titulo: string;          // ej. "Examen Parcial 1"
   fecha_evaluacion: string;
   puntaje_maximo: number;  // ej. 20
-  creado_el: Timestamp | Date | string;
+  creado_el: Date | string;
 }
 
 /**
- * 3. Subcolección: Secciones (Variantes de examen por fila/grupo)
- * Ruta: /cursos/{cursoId}/evaluaciones/{evaluacionId}/secciones/{seccionId}
+ * 3. Modelo: Secciones (Variantes de examen por fila/grupo)
  */
 export interface Seccion {
   id?: string;
@@ -87,7 +82,7 @@ export interface Seccion {
   total_preguntas: number;
   rubrica: ItemRubrica[];  // Lista de respuestas correctas y ponderaciones
   url_plantilla_pdf?: string;
-  creado_el: Timestamp | Date | string;
+  creado_el: Date | string;
 }
 
 /**
@@ -106,8 +101,7 @@ export interface DesglosePregunta {
 }
 
 /**
- * 4. Subcolección: Examenes_Alumnos
- * Ruta: /cursos/{cursoId}/evaluaciones/{evaluacionId}/secciones/{seccionId}/examenes_alumnos/{examenId}
+ * 4. Modelo: Exámenes de Alumnos
  */
 export interface ExamenAlumno {
   id?: string;
@@ -125,8 +119,8 @@ export interface ExamenAlumno {
   desglose_json: DesglosePregunta[];
   motivo_revision_manual?: string;
   revisado_por?: string;
-  creado_el: Timestamp | Date | string;
-  actualizado_el?: Timestamp | Date | string;
+  creado_el: Date | string;
+  actualizado_el?: Date | string;
 }
 
 /**
@@ -158,4 +152,3 @@ export interface GeminiGradeResult {
     observaciones?: string;
   }[];
 }
-

@@ -1,0 +1,69 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Curso {
+  id             String       @id @default(uuid())
+  codigo         String
+  nombre         String
+  periodo        String
+  profesor_id    String?
+  creado_el      DateTime     @default(now())
+  actualizado_el DateTime?    @updatedAt
+  evaluaciones   Evaluacion[]
+}
+
+model Evaluacion {
+  id               String         @id @default(uuid())
+  curso_id         String
+  curso            Curso          @relation(fields: [curso_id], references: [id], onDelete: Cascade)
+  titulo           String
+  fecha_evaluacion String
+  puntaje_maximo   Float          @default(20)
+  creado_el        DateTime       @default(now())
+  secciones        Seccion[]
+  examenes         ExamenAlumno[]
+}
+
+model Seccion {
+  id                 String         @id @default(uuid())
+  evaluacion_id      String
+  evaluacion         Evaluacion     @relation(fields: [evaluacion_id], references: [id], onDelete: Cascade)
+  nombre             String
+  total_preguntas    Int
+  rubrica            String         // Formato JSON serializado de ItemRubrica[]
+  url_plantilla_pdf  String?
+  creado_el          DateTime       @default(now())
+  examenes           ExamenAlumno[]
+}
+
+model ExamenAlumno {
+  id                     String      @id @default(uuid())
+  seccion_id             String
+  seccion                Seccion     @relation(fields: [seccion_id], references: [id], onDelete: Cascade)
+  evaluacion_id          String
+  evaluacion             Evaluacion  @relation(fields: [evaluacion_id], references: [id], onDelete: Cascade)
+  curso_id               String
+  codigo_alumno          String?
+  nombre                 String
+  nota_total             Float
+  nota_maxima            Float       @default(20)
+  confianza_lectura      Float
+  estado_revision        String      @default("aprobado_ia") // 'aprobado_ia' | 'requiere_revision_manual' | 'corregido_manual'
+  url_pdf                String
+  ruta_storage_pdf       String
+  desglose_json          String      // Formato JSON serializado de DesglosePregunta[]
+  motivo_revision_manual String?
+  revisado_por           String?
+  creado_el              DateTime    @default(now())
+  actualizado_el         DateTime?   @updatedAt
+}
+

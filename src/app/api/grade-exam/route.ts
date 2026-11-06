@@ -1,58 +1,43 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { obtenerSeccion, guardarExamenAlumno } from '@/lib/firebase/firestore.service';
+import fs from 'fs';
+import path from 'path';
+import { PDFDocument } from 'pdf-lib';
+import { prisma } from '@/lib/prisma';
 import { calificarExamenConGemini } from '@/lib/gemini/grader';
-import { EstadoRevision, ExamenAlumno } from '@/types/database';
+import { EstadoRevision, ItemRubrica, DesglosePregunta } from '@/types/database';
 
-export const maxDuration = 60; // Permite hasta 60s en entornos serverless
+export const maxDuration = 300; // Permite procesamiento por lotes prolongado
 
 /**
- * Extractor básico de primera página del PDF a imagen.
- * Si el entorno cuenta con librerías nativas de canvas/poppler procesa el render;
- * de lo contrario, envía el buffer optimizado de alta resolución con soporte nativo de PDF/visión en Gemini 1.5 Pro.
+ * Carga el buffer del PDF desde el disco local o desde URL local/remota
  */
-async function extractFirstPageFromPdf(
-  pdfBuffer: Buffer
-): Promise<{ buffer: Buffer; mimeType: 'image/png' | 'image/jpeg' | 'application/pdf' }> {
-  try {
-    // Si el buffer ya es una imagen directa (en caso de subida directa de escaneo JPG/PNG)
-    const isPng = pdfBuffer.subarray(0, 8).toString('hex') === '89504e470d0a1a0a';
-    const isJpg = pdfBuffer.subarray(0, 3).toString('hex') === 'ffd8ff';
-
-    if (isPng) return { buffer: pdfBuffer, mimeType: 'image/png' };
-    if (isJpg) return { buffer: pdfBuffer, mimeType: 'image/jpeg' };
-
-    // Para archivos PDF: Gemini 1.5 Pro procesa nativamente documentos PDF aplicando internamente
-    // rasterizado multimodal a 300 DPI por página para transcripción caligráfica.
-    return {
-      buffer: pdfBuffer,
-      mimeType: 'application/pdf',
-    };
-  } catch (err) {
-    console.warn('Fallo en extracción de imagen del PDF, usando buffer original:', err);
-    return {
-      buffer: pdfBuffer,
-      mimeType: 'application/pdf',
-    };
+function loadPdfBufferLocal(filePath?: string, urlPdf?: string): Buffer {
+  // 1. Si viene una ruta absoluta de disco local
+  if (filePath && fs.existsSync(filePath)) {
+    console.log(`📖 Leyendo PDF directamente desde filePath: ${filePath}`);
+    return fs.readFileSync(filePath);
   }
-}
 
-/**
- * Descarga el contenido binario del PDF desde la URL de Cloud Storage con control de Timeout
- */
-async function fetchPdfBufferWithTimeout(url: string, timeoutMs = 25000): Promise<Buffer> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) {
-      throw new Error(`HTTP Error al descargar archivo: ${res.status} ${res.statusText}`);
+  // 2. Si viene una ruta pública local (ej: /uploads/archivo.pdf)
+  if (urlPdf && urlPdf.startsWith('/uploads/')) {
+    const resolvedPath = path.join(process.cwd(), 'public', urlPdf);
+    if (fs.existsSync(resolvedPath)) {
+      console.log(`📖 Leyendo PDF desde ruta pública local: ${resolvedPath}`);
+      return fs.readFileSync(resolvedPath);
     }
-    const arrayBuffer = await res.arrayBuffer();
-    return Buffer.from(arrayBuffer);
-  } finally {
-    clearTimeout(timer);
   }
+
+  // 3. Si viene solo el nombre del archivo dentro de public/uploads/
+  if (urlPdf) {
+    const fileName = path.basename(urlPdf);
+    const resolvedPath = path.join(process.cwd(), 'public', 'uploads', fileName);
+    if (fs.existsSync(resolvedPath)) {
+      console.log(`📖 Leyendo PDF desde uploads/basename: ${resolvedPath}`);
+      return fs.readFileSync(resolvedPath);
+    }
+  }
+
+  throw new Error(`No se encontró el archivo PDF en el disco local (filePath: ${filePath}, urlPdf: ${urlPdf}).`);
 }
 
 export async function POST(req: NextRequest) {
@@ -64,6 +49,7 @@ export async function POST(req: NextRequest) {
     let evaluacionId = '';
     let seccionId = '';
     let urlPdf = '';
+    let filePath = '';
     let storagePath = '';
     let directBuffer: Buffer | null = null;
 
@@ -75,13 +61,15 @@ export async function POST(req: NextRequest) {
       evaluacionId = body.evaluacionId;
       seccionId = body.seccionId;
       urlPdf = body.urlPdf;
-      storagePath = body.storagePath || '';
+      filePath = body.filePath || '';
+      storagePath = body.storagePath || body.urlPdf || '';
     } else if (contentType.includes('multipart/form-data')) {
       const formData = await req.formData();
       cursoId = (formData.get('cursoId') as string) || '';
       evaluacionId = (formData.get('evaluacionId') as string) || '';
       seccionId = (formData.get('seccionId') as string) || '';
       urlPdf = (formData.get('urlPdf') as string) || '';
+      filePath = (formData.get('filePath') as string) || '';
       storagePath = (formData.get('storagePath') as string) || '';
 
       const file = formData.get('file') as File | null;
@@ -104,110 +92,180 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (!urlPdf && !directBuffer) {
+    if (!urlPdf && !filePath && !directBuffer) {
       return NextResponse.json(
-        { error: 'Debe proporcionarse la urlPdf o adjuntar un archivo en el cuerpo de la solicitud.' },
+        { error: 'Debe proporcionarse la ruta del archivo PDF o adjuntar el archivo directamente.' },
         { status: 400 }
       );
     }
 
-    // 3. Obtener la Sección y su respectiva Rúbrica desde Firestore
-    const seccion = await obtenerSeccion(cursoId, evaluacionId, seccionId);
+    // 3. Obtener la Sección y su respectiva Rúbrica desde SQLite mediante Prisma
+    const seccion = await prisma.seccion.findUnique({
+      where: { id: seccionId },
+    });
+
     if (!seccion) {
       return NextResponse.json(
-        { error: `No se encontró la sección con ID ${seccionId} en la evaluación especificada.` },
+        { error: `No se encontró la sección con ID ${seccionId} en la base de datos.` },
         { status: 404 }
       );
     }
 
-    if (!seccion.rubrica || seccion.rubrica.length === 0) {
+    let rubrica: ItemRubrica[] = [];
+    try {
+      rubrica = typeof seccion.rubrica === 'string' ? JSON.parse(seccion.rubrica) : seccion.rubrica;
+    } catch (e) {
+      rubrica = [];
+    }
+
+    if (!rubrica || rubrica.length === 0) {
       return NextResponse.json(
         { error: 'La sección no tiene configurada una rúbrica de respuestas correctas.' },
         { status: 400 }
       );
     }
 
-    // 4. Descargar u obtener el buffer binario del examen
+    // 4. Cargar buffer del archivo localmente usando File System
     let pdfBuffer: Buffer;
     if (directBuffer) {
       pdfBuffer = directBuffer;
     } else {
       try {
-        pdfBuffer = await fetchPdfBufferWithTimeout(urlPdf, 20000);
-      } catch (dlError) {
+        pdfBuffer = loadPdfBufferLocal(filePath, urlPdf);
+      } catch (fsErr: any) {
         return NextResponse.json(
-          { error: `Error descargando el examen desde Cloud Storage: ${(dlError as Error).message}` },
-          { status: 504 }
+          { error: `Error leyendo el archivo PDF localmente: ${fsErr.message}` },
+          { status: 404 }
         );
       }
     }
 
-    // 5. Aislar la primera página / preparar buffer visual para visión caligráfica
-    const visualContent = await extractFirstPageFromPdf(pdfBuffer);
+    // 5. Cargar documento PDF con pdf-lib y determinar cantidad de páginas
+    const pdfDoc = await PDFDocument.load(pdfBuffer);
+    const pageCount = pdfDoc.getPageCount();
+    console.log(`📑 PDF cargado con éxito. Total de páginas detectadas: ${pageCount}`);
 
-    // 6. Calificar con Gemini 1.5 Pro mediante Grader
-    const resultadoIA = await calificarExamenConGemini(
-      visualContent.buffer,
-      visualContent.mimeType,
-      seccion.rubrica
-    );
+    const uploadsDir = path.join(process.cwd(), 'public', 'uploads');
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
 
-    // 7. Determinar estado de revisión según confianza de lectura (umbral >= 85)
-    const estadoRevision: EstadoRevision =
-      resultadoIA.confianza_lectura >= 85 && !resultadoIA.requiere_revision_humana
-        ? 'aprobado_ia'
-        : 'requiere_revision_manual';
+    const timePrefix = Date.now();
+    const examenesCreados: any[] = [];
 
-    // 8. Construir objeto ExamenAlumno para Firestore
-    const examenData: Omit<ExamenAlumno, 'id' | 'creado_el' | 'actualizado_el'> = {
-      seccion_id: seccionId,
-      evaluacion_id: evaluacionId,
-      curso_id: cursoId,
-      codigo_alumno: resultadoIA.codigo_alumno,
-      nombre: resultadoIA.nombre_detectado,
-      nota_total: resultadoIA.nota_total,
-      nota_maxima: resultadoIA.nota_maxima,
-      confianza_lectura: resultadoIA.confianza_lectura,
-      estado_revision: estadoRevision,
-      url_pdf: urlPdf || '',
-      ruta_storage_pdf: storagePath,
-      desglose_json: resultadoIA.desglose_json,
-      motivo_revision_manual: resultadoIA.motivo_revision_manual,
-    };
+    // 6. Procesamiento por Lotes Secuencial (1 página = 1 examen de alumno)
+    // Se ejecuta de manera secuencial (for...of) para evitar saturación de cuota y errores 503/429 en Gemini
+    for (let pageIdx = 0; pageIdx < pageCount; pageIdx++) {
+      console.log(`🔍 [Lote] Procesando página ${pageIdx + 1} de ${pageCount}...`);
 
-    // 9. Persistir registro en Firestore
-    const examenId = await guardarExamenAlumno(cursoId, evaluacionId, seccionId, examenData);
+      // Crear un PDF independiente de 1 página
+      const singlePageDoc = await PDFDocument.create();
+      const [copiedPage] = await singlePageDoc.copyPages(pdfDoc, [pageIdx]);
+      singlePageDoc.addPage(copiedPage);
+
+      const singlePdfBytes = await singlePageDoc.save();
+      const singlePdfBuffer = Buffer.from(singlePdfBytes);
+
+      // Guardar el archivo PDF individual en disco local
+      const pageFileName = `examen_${timePrefix}_p${pageIdx + 1}.pdf`;
+      const pageFilePath = path.join(uploadsDir, pageFileName);
+      const pagePublicUrl = `/uploads/${pageFileName}`;
+      fs.writeFileSync(pageFilePath, singlePdfBuffer);
+
+      // Calificar la página con Gemini Multimodal
+      console.log(`🤖 [Lote] Evaluando página ${pageIdx + 1}/${pageCount} con Gemini...`);
+      const resultadoIA = await calificarExamenConGemini(
+        singlePdfBuffer,
+        'application/pdf',
+        rubrica
+      );
+
+      // Determinar estado de revisión según confianza de lectura (umbral >= 85)
+      const estadoRevision: EstadoRevision =
+        resultadoIA.confianza_lectura >= 85 && !resultadoIA.requiere_revision_humana
+          ? 'aprobado_ia'
+          : 'requiere_revision_manual';
+
+      const desgloseSanitizado: DesglosePregunta[] = (resultadoIA.desglose_json || []).map((item) => ({
+        ...item,
+        justificacion: item.justificacion || '',
+        observaciones: item.observaciones || '',
+      }));
+
+      // Persistir examen en SQLite con Prisma
+      const nuevoExamen = await prisma.examenAlumno.create({
+        data: {
+          seccion_id: seccionId,
+          evaluacion_id: evaluacionId,
+          curso_id: cursoId,
+          codigo_alumno: resultadoIA.codigo_alumno || '',
+          nombre: resultadoIA.nombre_detectado || `Alumno Pág ${pageIdx + 1}`,
+          nota_total: resultadoIA.nota_total,
+          nota_maxima: resultadoIA.nota_maxima || 20,
+          confianza_lectura: resultadoIA.confianza_lectura,
+          estado_revision: estadoRevision,
+          url_pdf: pagePublicUrl,
+          ruta_storage_pdf: pagePublicUrl,
+          desglose_json: JSON.stringify(desgloseSanitizado),
+          motivo_revision_manual: resultadoIA.motivo_revision_manual || '',
+        },
+      });
+
+      console.log(`✅ [Lote] Examen guardado en SQLite (ID: ${nuevoExamen.id}, Alumno: ${nuevoExamen.nombre}, Nota: ${nuevoExamen.nota_total})`);
+
+      examenesCreados.push({
+        ...nuevoExamen,
+        desglose_json: desgloseSanitizado,
+      });
+    }
 
     const duracionMs = Date.now() - startTime;
+    console.log(`✨ Procesamiento por lotes completado: ${examenesCreados.length} exámenes guardados en ${duracionMs}ms`);
 
-    // 10. Devolver respuesta 200 con el examen calificado
+    // 7. Devolver respuesta 200 con el listado completo de exámenes calificados
     return NextResponse.json(
       {
         success: true,
         duracion_ms: duracionMs,
-        examen_id: examenId,
-        examen: {
-          id: examenId,
-          ...examenData,
-        },
+        total_paginas: pageCount,
+        total_evaluados: examenesCreados.length,
+        examenes: examenesCreados,
+        // Retrocompatibilidad con clientes que esperan examen individual
+        examen: examenesCreados[0],
+        examen_id: examenesCreados[0]?.id,
       },
       { status: 200 }
     );
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error en /api/grade-exam:', error);
 
-    const errorMessage = (error as Error).message || 'Error interno del servidor';
+    const errorMessage = error.message || 'Error interno del servidor';
     const isTimeout = errorMessage.toLowerCase().includes('timeout') || errorMessage.toLowerCase().includes('aborted');
+    const isOverloaded =
+      errorMessage.includes('SERVICE_OVERLOADED') ||
+      errorMessage.includes('503') ||
+      errorMessage.includes('UNAVAILABLE') ||
+      errorMessage.includes('high demand') ||
+      errorMessage.includes('RESOURCE_EXHAUSTED');
+
+    let clientMessage = errorMessage;
+    let statusCode = 500;
+
+    if (isOverloaded) {
+      statusCode = 503;
+      clientMessage = 'Los servidores de Inteligencia Artificial están saturados globalmente. Tu examen no se pudo evaluar. Por favor, intenta de nuevo en unos minutos.';
+    } else if (isTimeout) {
+      statusCode = 504;
+      clientMessage = 'La solicitud excedió el tiempo límite durante el procesamiento del examen. Por favor, reintenta.';
+    }
 
     return NextResponse.json(
       {
         success: false,
-        error: isTimeout
-          ? 'La solicitud excedió el tiempo límite durante el procesamiento del examen.'
-          : errorMessage,
+        error: clientMessage,
+        isOverloaded,
       },
-      { status: isTimeout ? 504 : 500 }
+      { status: statusCode }
     );
   }
 }
-

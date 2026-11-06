@@ -3,7 +3,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, Check, AlertCircle, FileText, ExternalLink, Loader2 } from 'lucide-react';
 import { ExamenAlumno } from '@/types/database';
-import { actualizarExamenManual } from '@/lib/firebase/firestore.service';
 
 interface ManualGradingDrawerProps {
   isOpen: boolean;
@@ -65,18 +64,22 @@ export default function ManualGradingDrawer({
 
     setIsSaving(true);
     try {
-      await actualizarExamenManual(
-        examen.curso_id,
-        examen.evaluacion_id,
-        examen.seccion_id,
-        examen.id,
-        {
+      const res = await fetch('/api/examenes', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: examen.id,
           nota_total: notaNum,
           estado_revision: 'corregido_manual',
           motivo_revision_manual: motivoAjuste,
           revisado_por: revisorNombre,
-        }
-      );
+        }),
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Error al guardar la calificación manual');
+      }
 
       const examenActualizado: ExamenAlumno = {
         ...examen,

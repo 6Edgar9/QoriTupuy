@@ -12,13 +12,22 @@ import {
   Eye,
   Loader2,
   RefreshCw,
+  Trash2,
+  CheckCircle2,
+  X,
+  Info,
 } from 'lucide-react';
-import { listarExamenesAprobadosIA } from '@/lib/firebase/firestore.service';
 import { ExamenAlumno } from '@/types/database';
 import PdfViewerModal from '@/components/exam/PdfViewerModal';
 
 interface PageProps {
   params: Promise<{ id: string }>;
+}
+
+interface Toast {
+  id: string;
+  tipo: 'exito' | 'error' | 'info';
+  mensaje: string;
 }
 
 export default function ExamenesAprobadosPage({ params }: PageProps) {
@@ -34,19 +43,37 @@ export default function ExamenesAprobadosPage({ params }: PageProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Estados de eliminación
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [isClearing, setIsClearing] = useState(false);
+
+  // Sistema de Notificaciones Toast
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
   // Estado del visor modal
   const [selectedExam, setSelectedExam] = useState<ExamenAlumno | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+
+  const notificar = (mensaje: string, tipo: 'exito' | 'error' | 'info' = 'exito') => {
+    const id = Math.random().toString(36).substring(2, 9);
+    setToasts((prev) => [...prev, { id, tipo, mensaje }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 4000);
+  };
 
   const cargarExamenes = async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const data = await listarExamenesAprobadosIA(cursoId, evaluacionId, seccionId);
+      const res = await fetch(`/api/examenes?seccionId=${seccionId}&tipo=aprobados`);
+      if (!res.ok) throw new Error('Error al consultar exámenes calificados');
+      const data: ExamenAlumno[] = await res.json();
       setExamenes(data);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error cargando aprobados por IA:', err);
       setError('No se pudieron obtener los exámenes calificados.');
+      notificar('Error al cargar exámenes: ' + err.message, 'error');
     } finally {
       setIsLoading(false);
     }
@@ -55,6 +82,61 @@ export default function ExamenesAprobadosPage({ params }: PageProps) {
   useEffect(() => {
     cargarExamenes();
   }, [cursoId, evaluacionId, seccionId]);
+
+  // Manejador para eliminar un examen individual
+  const handleEliminarExamen = async (examen: ExamenAlumno) => {
+    if (!examen.id) return;
+    const confirmacion = window.confirm(
+      `¿Deseas eliminar permanentemente el examen de "${examen.nombre}"?`
+    );
+    if (!confirmacion) return;
+
+    setDeletingId(examen.id);
+    try {
+      const res = await fetch(`/api/examenes/${examen.id}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Error al eliminar el examen');
+      }
+
+      setExamenes((prev) => prev.filter((item) => item.id !== examen.id));
+      notificar(`Examen de "${examen.nombre}" eliminado correctamente.`, 'exito');
+    } catch (err: any) {
+      console.error('Error al eliminar examen:', err);
+      notificar('No se pudo eliminar el examen: ' + err.message, 'error');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  // Manejador para vaciar todos los exámenes de la sección
+  const handleVaciarRegistro = async () => {
+    const confirmacion = window.confirm(
+      '⚠️ ¿Estás completamente seguro de que deseas VACIAR todos los exámenes de esta sección?\n\nEsta acción eliminará todos los registros de SQLite permanentemente.'
+    );
+    if (!confirmacion) return;
+
+    setIsClearing(true);
+    try {
+      const res = await fetch(`/api/secciones/${seccionId}/vaciar`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Error al vaciar los exámenes');
+      }
+      const data = await res.json();
+      setExamenes([]);
+      notificar(data.message || 'Se han eliminado todos los exámenes de la sección.', 'exito');
+    } catch (err: any) {
+      console.error('Error al vaciar exámenes:', err);
+      notificar('Error al vaciar la sección: ' + err.message, 'error');
+    } finally {
+      setIsClearing(false);
+    }
+  };
 
   // Filtrado local por término de búsqueda
   const examenesFiltrados = examenes.filter((item) =>
@@ -68,8 +150,35 @@ export default function ExamenesAprobadosPage({ params }: PageProps) {
   };
 
   return (
-    <div className="space-y-6">
-      {/* Encabezado y Métricas */}
+    <div className="space-y-6 relative">
+      {/* Sistema de Toasts */}
+      <div className="fixed top-5 right-5 z-50 flex flex-col gap-2 pointer-events-none">
+        {toasts.map((toast) => (
+          <div
+            key={toast.id}
+            className={`pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-xl shadow-lg border text-sm max-w-sm transition-all duration-300 animate-in slide-in-from-top-2 ${
+              toast.tipo === 'exito'
+                ? 'bg-emerald-900/90 text-white border-emerald-700 backdrop-blur-md'
+                : toast.tipo === 'error'
+                ? 'bg-rose-900/90 text-white border-rose-700 backdrop-blur-md'
+                : 'bg-slate-900/90 text-white border-slate-700 backdrop-blur-md'
+            }`}
+          >
+            {toast.tipo === 'exito' && <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />}
+            {toast.tipo === 'error' && <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0" />}
+            {toast.tipo === 'info' && <Info className="w-5 h-5 text-blue-400 shrink-0" />}
+            <span className="font-medium text-xs leading-relaxed">{toast.mensaje}</span>
+            <button
+              onClick={() => setToasts((prev) => prev.filter((t) => t.id !== toast.id))}
+              className="text-white/60 hover:text-white shrink-0 ml-auto"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* Encabezado y Acciones */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
@@ -85,14 +194,32 @@ export default function ExamenesAprobadosPage({ params }: PageProps) {
           </p>
         </div>
 
-        <button
-          onClick={cargarExamenes}
-          disabled={isLoading}
-          className="inline-flex items-center gap-2 px-3.5 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 shadow-sm transition-all"
-        >
-          <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-          Refrescar
-        </button>
+        <div className="flex items-center gap-2.5 flex-wrap">
+          {/* Botón Vaciar Registro */}
+          <button
+            onClick={handleVaciarRegistro}
+            disabled={isClearing || examenes.length === 0}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition-all shadow-xs disabled:opacity-40 cursor-pointer"
+            title="Eliminar todos los exámenes de esta sección"
+          >
+            {isClearing ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Trash2 className="w-3.5 h-3.5" />
+            )}
+            <span>Vaciar Registro de Notas</span>
+          </button>
+
+          {/* Botón Refrescar */}
+          <button
+            onClick={cargarExamenes}
+            disabled={isLoading}
+            className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 shadow-xs transition-all cursor-pointer"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+            <span>Refrescar</span>
+          </button>
+        </div>
       </div>
 
       {/* Barra de Búsqueda y Filtros */}
@@ -178,13 +305,27 @@ export default function ExamenesAprobadosPage({ params }: PageProps) {
                       </span>
                     </td>
                     <td className="py-4 px-6 text-right">
-                      <button
-                        onClick={() => handleOpenPdf(item)}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-700 bg-amber-50 hover:bg-amber-100 rounded-lg transition-colors border border-amber-200"
-                      >
-                        <Eye className="w-3.5 h-3.5" />
-                        Ver Examen
-                      </button>
+                      <div className="inline-flex items-center gap-2">
+                        <button
+                          onClick={() => handleOpenPdf(item)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-700 bg-amber-50 hover:bg-amber-100 rounded-lg transition-colors border border-amber-200 cursor-pointer"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          <span>Ver Examen</span>
+                        </button>
+                        <button
+                          onClick={() => handleEliminarExamen(item)}
+                          disabled={deletingId === item.id}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors border border-transparent hover:border-rose-200 cursor-pointer disabled:opacity-50"
+                          title="Eliminar este examen"
+                        >
+                          {deletingId === item.id ? (
+                            <Loader2 className="w-4 h-4 animate-spin text-rose-600" />
+                          ) : (
+                            <Trash2 className="w-4 h-4" />
+                          )}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -209,4 +350,3 @@ export default function ExamenesAprobadosPage({ params }: PageProps) {
     </div>
   );
 }
-

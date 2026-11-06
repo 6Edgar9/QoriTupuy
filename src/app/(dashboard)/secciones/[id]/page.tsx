@@ -87,7 +87,7 @@ export default function SeccionDashboardPage({ params }: PageProps) {
             Cargar Exámenes Escaneados
           </h2>
           <p className="text-xs text-slate-500 mt-1">
-            Los PDFs se almacenan en Firebase Cloud Storage y se envían de forma automática a Gemini 1.5 Pro contrastando la rúbrica de esta sección.
+            Los PDFs y la base de datos se gestionan 100% de forma local (Offline-First en SQLite) y se envían a Gemini contrastando la rúbrica de esta sección.
           </p>
         </div>
 

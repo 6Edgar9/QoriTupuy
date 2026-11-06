@@ -9,15 +9,21 @@ import {
   Edit3,
   Loader2,
   RefreshCw,
-  FileQuestion,
-  HelpCircle,
+  Trash2,
+  X,
+  Info,
 } from 'lucide-react';
-import { listarExamenesRevisionManual } from '@/lib/firebase/firestore.service';
 import { ExamenAlumno } from '@/types/database';
 import ManualGradingDrawer from '@/components/exam/ManualGradingDrawer';
 
 interface PageProps {
   params: Promise<{ id: string }>;
+}
+
+interface Toast {
+  id: string;
+  tipo: 'exito' | 'error' | 'info';
+  mensaje: string;
 }
 
 export default function BandejaRevisionPage({ params }: PageProps) {
@@ -33,19 +39,37 @@ export default function BandejaRevisionPage({ params }: PageProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Estados de eliminación
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [isClearing, setIsClearing] = useState(false);
+
+  // Notificaciones Toast
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
   // Estado del Drawer de corrección manual
   const [selectedExam, setSelectedExam] = useState<ExamenAlumno | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+
+  const notificar = (mensaje: string, tipo: 'exito' | 'error' | 'info' = 'exito') => {
+    const id = Math.random().toString(36).substring(2, 9);
+    setToasts((prev) => [...prev, { id, tipo, mensaje }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 4000);
+  };
 
   const cargarExamenesRevision = async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const data = await listarExamenesRevisionManual(cursoId, evaluacionId, seccionId);
+      const res = await fetch(`/api/examenes?seccionId=${seccionId}&tipo=revision`);
+      if (!res.ok) throw new Error('Error al consultar exámenes para revisión');
+      const data: ExamenAlumno[] = await res.json();
       setExamenes(data);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error cargando exámenes para revisión manual:', err);
       setError('No se pudieron obtener los exámenes de la bandeja de revisión.');
+      notificar('Error al cargar exámenes de revisión: ' + err.message, 'error');
     } finally {
       setIsLoading(false);
     }
@@ -63,6 +87,62 @@ export default function BandejaRevisionPage({ params }: PageProps) {
   const handleSavedSuccess = (examenActualizado: ExamenAlumno) => {
     // Al haber sido corregido manualmente, lo retiramos de la lista de revisión pendiente
     setExamenes((prev) => prev.filter((item) => item.id !== examenActualizado.id));
+    notificar(`Examen de "${examenActualizado.nombre}" corregido y calibrado con éxito.`, 'exito');
+  };
+
+  // Eliminar examen individual
+  const handleEliminarExamen = async (examen: ExamenAlumno) => {
+    if (!examen.id) return;
+    const confirmacion = window.confirm(
+      `¿Deseas eliminar permanentemente el examen de "${examen.nombre}" de la bandeja de revisión?`
+    );
+    if (!confirmacion) return;
+
+    setDeletingId(examen.id);
+    try {
+      const res = await fetch(`/api/examenes/${examen.id}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Error al eliminar el examen');
+      }
+
+      setExamenes((prev) => prev.filter((item) => item.id !== examen.id));
+      notificar(`Examen de "${examen.nombre}" eliminado correctamente.`, 'exito');
+    } catch (err: any) {
+      console.error('Error al eliminar examen:', err);
+      notificar('No se pudo eliminar el examen: ' + err.message, 'error');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  // Vaciar todos los exámenes de la sección
+  const handleVaciarRegistro = async () => {
+    const confirmacion = window.confirm(
+      '⚠️ ¿Estás completamente seguro de que deseas VACIAR todos los exámenes de esta sección?\n\nEsta acción eliminará todos los registros de SQLite permanentemente.'
+    );
+    if (!confirmacion) return;
+
+    setIsClearing(true);
+    try {
+      const res = await fetch(`/api/secciones/${seccionId}/vaciar`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Error al vaciar los exámenes');
+      }
+      const data = await res.json();
+      setExamenes([]);
+      notificar(data.message || 'Se han eliminado todos los exámenes de la sección.', 'exito');
+    } catch (err: any) {
+      console.error('Error al vaciar exámenes:', err);
+      notificar('Error al vaciar la sección: ' + err.message, 'error');
+    } finally {
+      setIsClearing(false);
+    }
   };
 
   const examenesFiltrados = examenes.filter((item) =>
@@ -71,8 +151,35 @@ export default function BandejaRevisionPage({ params }: PageProps) {
   );
 
   return (
-    <div className="space-y-6">
-      {/* Banner de Alerta Informativo */}
+    <div className="space-y-6 relative">
+      {/* Sistema de Toasts */}
+      <div className="fixed top-5 right-5 z-50 flex flex-col gap-2 pointer-events-none">
+        {toasts.map((toast) => (
+          <div
+            key={toast.id}
+            className={`pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-xl shadow-lg border text-sm max-w-sm transition-all duration-300 animate-in slide-in-from-top-2 ${
+              toast.tipo === 'exito'
+                ? 'bg-emerald-900/90 text-white border-emerald-700 backdrop-blur-md'
+                : toast.tipo === 'error'
+                ? 'bg-rose-900/90 text-white border-rose-700 backdrop-blur-md'
+                : 'bg-slate-900/90 text-white border-slate-700 backdrop-blur-md'
+            }`}
+          >
+            {toast.tipo === 'exito' && <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />}
+            {toast.tipo === 'error' && <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0" />}
+            {toast.tipo === 'info' && <Info className="w-5 h-5 text-blue-400 shrink-0" />}
+            <span className="font-medium text-xs leading-relaxed">{toast.mensaje}</span>
+            <button
+              onClick={() => setToasts((prev) => prev.filter((t) => t.id !== toast.id))}
+              className="text-white/60 hover:text-white shrink-0 ml-auto"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* Banner de Alerta Informativo y Acciones */}
       <div className="bg-amber-500/10 border border-amber-300 rounded-2xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex items-start gap-3.5">
           <div className="p-2.5 bg-amber-500 text-white rounded-xl shadow-sm shrink-0">
@@ -88,14 +195,32 @@ export default function BandejaRevisionPage({ params }: PageProps) {
           </div>
         </div>
 
-        <button
-          onClick={cargarExamenesRevision}
-          disabled={isLoading}
-          className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-amber-900 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-xl transition-all shadow-sm shrink-0"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-          Recargar Bandeja
-        </button>
+        <div className="flex items-center gap-2.5 flex-wrap shrink-0">
+          {/* Botón Vaciar Registro */}
+          <button
+            onClick={handleVaciarRegistro}
+            disabled={isClearing || examenes.length === 0}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition-all shadow-xs disabled:opacity-40 cursor-pointer"
+            title="Eliminar todos los exámenes de esta sección"
+          >
+            {isClearing ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Trash2 className="w-3.5 h-3.5" />
+            )}
+            <span>Vaciar Registro</span>
+          </button>
+
+          {/* Botón Recargar */}
+          <button
+            onClick={cargarExamenesRevision}
+            disabled={isLoading}
+            className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-amber-900 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-xl transition-all shadow-sm cursor-pointer"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+            <span>Recargar Bandeja</span>
+          </button>
+        </div>
       </div>
 
       {/* Buscador */}
@@ -147,7 +272,7 @@ export default function BandejaRevisionPage({ params }: PageProps) {
                   <th className="py-3.5 px-6 text-center">Nota Estimada IA</th>
                   <th className="py-3.5 px-6 text-center">Nivel Confianza</th>
                   <th className="py-3.5 px-6">Motivo de Alerta</th>
-                  <th className="py-3.5 px-6 text-right">Acción</th>
+                  <th className="py-3.5 px-6 text-right">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-sm">
@@ -175,13 +300,27 @@ export default function BandejaRevisionPage({ params }: PageProps) {
                       </p>
                     </td>
                     <td className="py-4 px-6 text-right">
-                      <button
-                        onClick={() => handleOpenDrawer(item)}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-lg transition-all shadow-sm"
-                      >
-                        <Edit3 className="w-3.5 h-3.5" />
-                        Ver y Corregir
-                      </button>
+                      <div className="inline-flex items-center gap-2">
+                        <button
+                          onClick={() => handleOpenDrawer(item)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-lg transition-all shadow-sm cursor-pointer"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                          <span>Ver y Corregir</span>
+                        </button>
+                        <button
+                          onClick={() => handleEliminarExamen(item)}
+                          disabled={deletingId === item.id}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors border border-transparent hover:border-rose-200 cursor-pointer disabled:opacity-50"
+                          title="Eliminar este examen"
+                        >
+                          {deletingId === item.id ? (
+                            <Loader2 className="w-4 h-4 animate-spin text-rose-600" />
+                          ) : (
+                            <Trash2 className="w-4 h-4" />
+                          )}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -201,4 +340,3 @@ export default function BandejaRevisionPage({ params }: PageProps) {
     </div>
   );
 }
-

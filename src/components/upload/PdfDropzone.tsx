@@ -2,7 +2,6 @@
 
 import React, { useState, useRef, DragEvent, ChangeEvent } from 'react';
 import { UploadCloud, FileText, CheckCircle2, AlertTriangle, Loader2 } from 'lucide-react';
-import { uploadHeavyPdf } from '@/lib/firebase/storage.service';
 import { ExamenAlumno } from '@/types/database';
 
 interface PdfDropzoneProps {
@@ -65,26 +64,33 @@ export default function PdfDropzone({
 
     setCurrentFile(file);
     setUploadState('uploading');
-    setProgressPercent(0);
-    setStatusMessage(`Subiendo ${file.name} a Firebase Storage...`);
+    setProgressPercent(20);
+    setStatusMessage(`Guardando ${file.name} localmente en public/uploads/...`);
 
     try {
-      // 3. Subida reanudable con control de progreso
-      const storageResult = await uploadHeavyPdf({
-        file,
-        folderPath: `cursos/${cursoId}/evaluaciones/${evaluacionId}/secciones/${seccionId}/examenes`,
-        fileName: file.name,
-        onProgress: (percent) => {
-          setProgressPercent(percent);
-          setStatusMessage(`Subiendo a la nube: ${percent}% completado...`);
-        },
+      // 3. Subida local mediante FormData hacia /api/upload-local
+      const formData = new FormData();
+      formData.append('file', file);
+
+      setProgressPercent(45);
+      const uploadRes = await fetch('/api/upload-local', {
+        method: 'POST',
+        body: formData,
       });
 
-      // 4. Iniciar análisis de visión computacional con Gemini 1.5 Pro
-      setUploadState('grading');
-      setStatusMessage('Gemini 1.5 Pro analizando caligrafía y contrastando con la rúbrica...');
+      const uploadData = await uploadRes.json();
+      if (!uploadRes.ok || !uploadData.success) {
+        throw new Error(uploadData.error || 'Error al guardar el archivo PDF en disco.');
+      }
 
-      const response = await fetch('/api/grade-exam', {
+      setProgressPercent(100);
+      console.log('✅ Archivo guardado localmente:', uploadData);
+
+      // 4. Iniciar análisis multimodal con Gemini pasando la ruta local
+      setUploadState('grading');
+      setStatusMessage('Gemini procesando caligrafía contra la rúbrica...');
+
+      const gradeRes = await fetch('/api/grade-exam', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -93,27 +99,48 @@ export default function PdfDropzone({
           cursoId,
           evaluacionId,
           seccionId,
-          urlPdf: storageResult.downloadUrl,
-          storagePath: storageResult.storagePath,
+          urlPdf: uploadData.publicUrl,       // Ruta pública (ej: /uploads/archivo.pdf) para el visor iframe
+          filePath: uploadData.absolutePath,  // Ruta absoluta en disco para lectura fs directa
+          storagePath: uploadData.publicUrl,
         }),
       });
 
-      const data = await response.json();
+      const gradeData = await gradeRes.json();
 
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Error durante la calificación del examen.');
+      if (!gradeRes.ok || !gradeData.success) {
+        // Detectar si la respuesta es por sobrecarga/demanda de IA
+        if (gradeRes.status === 503 || gradeData.isOverloaded || (gradeData.error && gradeData.error.includes('saturados'))) {
+          throw new Error('Los servidores de Inteligencia Artificial están saturados globalmente. Tu examen no se pudo evaluar. Por favor, intenta de nuevo en unos minutos.');
+        }
+        throw new Error(gradeData.error || 'Error durante la calificación del examen.');
       }
 
       setUploadState('success');
-      setLastExamResult(data.examen);
-      setStatusMessage(
-        `¡Examen de "${data.examen.nombre}" procesado con éxito! Nota: ${data.examen.nota_total}/${data.examen.nota_maxima || 20}`
-      );
-      onGradingSuccess?.(data.examen);
-    } catch (err) {
+      const listaExamenes: ExamenAlumno[] = gradeData.examenes || (gradeData.examen ? [gradeData.examen] : []);
+      const primerExamen = listaExamenes[0] || gradeData.examen;
+      setLastExamResult(primerExamen);
+
+      if (listaExamenes.length > 1) {
+        setStatusMessage(
+          `¡Lote de ${listaExamenes.length} exámenes evaluado con éxito y guardado en SQLite local!`
+        );
+        listaExamenes.forEach((ex) => onGradingSuccess?.(ex));
+      } else if (primerExamen) {
+        setStatusMessage(
+          `¡Examen de "${primerExamen.nombre}" evaluado con éxito! Nota: ${primerExamen.nota_total}/${primerExamen.nota_maxima || 20}`
+        );
+        onGradingSuccess?.(primerExamen);
+      }
+    } catch (err: any) {
       console.error('Error en proceso de subida y calificación:', err);
       setUploadState('error');
-      const msg = (err as Error).message || 'Ocurrió un error inesperado al procesar el examen.';
+      let msg = err.message || 'Ocurrió un error inesperado al procesar el examen.';
+
+      // Limpieza preventiva si se filtró algún JSON de error crudo
+      if (msg.includes('503') || msg.includes('UNAVAILABLE') || msg.includes('high demand') || msg.includes('SERVICE_OVERLOADED')) {
+        msg = 'Los servidores de Inteligencia Artificial están saturados globalmente. Tu examen no se pudo evaluar. Por favor, intenta de nuevo en unos minutos.';
+      }
+
       setStatusMessage(msg);
       onGradingError?.(msg);
     }
@@ -151,15 +178,14 @@ export default function PdfDropzone({
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         onClick={() => uploadState !== 'uploading' && uploadState !== 'grading' && fileInputRef.current?.click()}
-        className={`relative border-2 border-dashed rounded-2xl p-8 transition-all cursor-pointer flex flex-col items-center justify-center text-center ${
-          isDragging
+        className={`relative border-2 border-dashed rounded-2xl p-8 transition-all cursor-pointer flex flex-col items-center justify-center text-center ${isDragging
             ? 'border-amber-500 bg-amber-50/50 scale-[1.01]'
             : uploadState === 'error'
-            ? 'border-red-400 bg-red-50/40'
-            : uploadState === 'success'
-            ? 'border-emerald-500 bg-emerald-50/40'
-            : 'border-slate-300 hover:border-amber-500 hover:bg-slate-50/80 bg-white'
-        }`}
+              ? 'border-red-400 bg-red-50/40'
+              : uploadState === 'success'
+                ? 'border-emerald-500 bg-emerald-50/40'
+                : 'border-slate-300 hover:border-amber-500 hover:bg-slate-50/80 bg-white'
+          }`}
       >
         <input
           ref={fileInputRef}
@@ -181,13 +207,13 @@ export default function PdfDropzone({
                 Arrastra aquí el examen escaneado en PDF o <span className="text-amber-700 underline">haz clic para examinar</span>
               </p>
               <p className="text-sm text-slate-500 mt-1">
-                Soporte para documentos de hasta <strong className="font-semibold text-slate-700">100 MB</strong>. Detección automática por visión computacional.
+                Almacenamiento y persistencia 100% local (File System + SQLite con Prisma ORM, sin latencia ni cuellos de botella de red).
               </p>
             </div>
           </div>
         )}
 
-        {/* Estado: Subiendo a Firebase Storage */}
+        {/* Estado: Guardando en disco local */}
         {uploadState === 'uploading' && (
           <div className="w-full flex flex-col items-center space-y-4 py-2">
             <div className="p-4 bg-blue-100 text-blue-700 rounded-full animate-pulse">
@@ -196,7 +222,7 @@ export default function PdfDropzone({
             <div className="w-full max-w-md">
               <div className="flex justify-between text-sm font-medium text-slate-700 mb-2">
                 <span>{currentFile?.name}</span>
-                <span>{progressPercent}%</span>
+                <span>Guardando en servidor local...</span>
               </div>
               <div className="w-full bg-slate-200 rounded-full h-3 overflow-hidden">
                 <div
@@ -209,7 +235,7 @@ export default function PdfDropzone({
           </div>
         )}
 
-        {/* Estado: Calificando con Gemini 1.5 Pro */}
+        {/* Estado: Calificando con Gemini */}
         {uploadState === 'grading' && (
           <div className="flex flex-col items-center space-y-4 py-4">
             <div className="relative">
@@ -218,7 +244,7 @@ export default function PdfDropzone({
               </div>
             </div>
             <div className="text-center">
-              <p className="text-base font-semibold text-slate-800">Evaluando con Gemini 1.5 Pro</p>
+              <p className="text-base font-semibold text-slate-800">Evaluando con Gemini Multimodal</p>
               <p className="text-sm text-slate-600 mt-1">{statusMessage}</p>
             </div>
           </div>
@@ -276,4 +302,3 @@ export default function PdfDropzone({
     </div>
   );
 }
-
