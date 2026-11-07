@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   BookOpen,
   Plus,
@@ -37,6 +38,8 @@ interface DeleteTarget {
 }
 
 export default function GestionCursosPage() {
+  const router = useRouter();
+
   // Datos principales
   const [cursos, setCursos] = useState<Curso[]>([]);
   const [cursoSeleccionado, setCursoSeleccionado] = useState<Curso | null>(null);
@@ -410,6 +413,8 @@ export default function GestionCursosPage() {
         return clean;
       });
 
+      let destinoRedireccion = '';
+
       if (seccionAEditar?.id) {
         // Actualizar mediante PUT /api/secciones/:id
         const res = await fetch(`/api/secciones/${seccionAEditar.id}`, {
@@ -428,6 +433,11 @@ export default function GestionCursosPage() {
           prev.map((s) => (s.id === seccionAEditar.id ? seccionActualizada : s))
         );
         notificar(`Sección "${nombreNormalizado}" y rúbrica actualizadas.`);
+
+        // Redirección Segura: exclusivamente tras confirmar res.ok === true
+        if (res.ok === true) {
+          destinoRedireccion = `/secciones/${seccionActualizada.id}`;
+        }
       } else {
         // Crear mediante POST /api/secciones
         const res = await fetch('/api/secciones', {
@@ -445,10 +455,19 @@ export default function GestionCursosPage() {
 
         setSecciones((prev) => [...prev, seccionCreada]);
         notificar(`Sección "${nombreNormalizado}" creada con éxito.`);
+
+        // Redirección Segura: exclusivamente tras confirmar res.ok === true
+        if (res.ok === true) {
+          destinoRedireccion = `/secciones/${seccionCreada.id}`;
+        }
       }
 
       setModalSeccionAbierto(false);
       setSeccionAEditar(null);
+
+      if (destinoRedireccion) {
+        router.push(destinoRedireccion);
+      }
     } catch (err: any) {
       notificar('Error al guardar sección: ' + err.message, 'error');
     } finally {
@@ -983,11 +1002,12 @@ export default function GestionCursosPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in overflow-y-auto">
           <div className="bg-white rounded-2xl w-full max-w-3xl p-6 border border-slate-200 shadow-2xl relative my-8">
             <button
+              disabled={submitting}
               onClick={() => {
                 setModalSeccionAbierto(false);
                 setSeccionAEditar(null);
               }}
-              className="absolute right-4 top-4 text-slate-400 hover:text-slate-600"
+              className="absolute right-4 top-4 text-slate-400 hover:text-slate-600 disabled:opacity-50"
             >
               <X className="w-5 h-5" />
             </button>
@@ -1011,9 +1031,10 @@ export default function GestionCursosPage() {
                     type="text"
                     placeholder="ej. Fila A, Fila B, Grupo 1"
                     value={formNombreSeccion}
+                    disabled={submitting}
                     onChange={(e) => setFormNombreSeccion(e.target.value)}
                     required
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:outline-none disabled:bg-slate-100 disabled:text-slate-500"
                   />
                 </div>
                 <div>
@@ -1025,9 +1046,10 @@ export default function GestionCursosPage() {
                     min="1"
                     max="50"
                     value={totalPreguntas}
+                    disabled={submitting}
                     onChange={(e) => ajustarCantidadPreguntas(parseInt(e.target.value) || 1)}
                     required
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:outline-none disabled:bg-slate-100 disabled:text-slate-500"
                   />
                 </div>
               </div>
@@ -1037,17 +1059,23 @@ export default function GestionCursosPage() {
                 <label className="block text-xs font-semibold text-slate-700 mb-2">
                   Configuración Multimodal de Preguntas y Criterios:
                 </label>
-                <RubricEditor rubrica={rubricaDraft} onChange={setRubricaDraft} />
+                <RubricEditor
+                  rubrica={rubricaDraft}
+                  onChange={setRubricaDraft}
+                  isSubmitting={submitting}
+                  showActionButtons={false}
+                />
               </div>
 
               <div className="pt-3 border-t border-slate-200 flex justify-end gap-3">
                 <button
                   type="button"
+                  disabled={submitting}
                   onClick={() => {
                     setModalSeccionAbierto(false);
                     setSeccionAEditar(null);
                   }}
-                  className="px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg"
+                  className="px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg disabled:opacity-50"
                 >
                   Cancelar
                 </button>

@@ -8,6 +8,9 @@ import { EstadoRevision, ItemRubrica, DesglosePregunta } from '@/types/database'
 
 export const maxDuration = 300; // Permite procesamiento por lotes prolongado
 
+// Función utilitaria para Throttling (Pausa Controlada entre alumnos)
+const delay = (ms: number) => new Promise((res) => setTimeout(res, ms));
+
 /**
  * Genera un PDF de retroalimentación estampando la nota en rojo en la esquina superior derecha
  * y agregando un resumen de aciertos y fallos en el encabezado.
@@ -208,7 +211,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 4. Cargar buffer del archivo localmente usando File System
-    let pdfBuffer: Buffer;
+    let pdfBuffer: Buffer | null = null;
     if (directBuffer) {
       pdfBuffer = directBuffer;
     } else {
@@ -238,11 +241,15 @@ export async function POST(req: NextRequest) {
     const examenesCreados: any[] = [];
     const pageIndices = Array.from({ length: pageCount }, (_, idx) => idx);
 
-    // 6. Procesamiento por Lotes Secuencial (1 página = 1 examen de alumno)
-    // Se itera secuencialmente con for...of y await (CERO uso de Promise.all) para evitar errores SQLITE_BUSY y 503 de Gemini
+    // 6. Procesamiento por Lotes Secuencial Estricto (1 página = 1 examen de alumno)
+    // Se itera secuencialmente con for...of y await (CERO uso de Promise.all) para evitar saturación de Gemini y memoria
     try {
       for (const pageIdx of pageIndices) {
         let singlePageFilePath: string | null = null;
+        let singlePdfBytes: Uint8Array | null = null;
+        let singlePdfBuffer: Buffer | null = null;
+        let feedbackBuffer: Buffer | null = null;
+
         try {
           console.log(`🔍 [Lote Secuencial] Procesando página ${pageIdx + 1} de ${pageCount}...`);
 
@@ -251,8 +258,8 @@ export async function POST(req: NextRequest) {
           const [copiedPage] = await singlePageDoc.copyPages(pdfDoc, [pageIdx]);
           singlePageDoc.addPage(copiedPage);
 
-          const singlePdfBytes = await singlePageDoc.save();
-          const singlePdfBuffer = Buffer.from(singlePdfBytes);
+          singlePdfBytes = await singlePageDoc.save();
+          singlePdfBuffer = Buffer.from(singlePdfBytes);
 
           // Guardar permanentemente la página individual del alumno
           const pageExamFileName = `examen_${timePrefix}_p${pageIdx + 1}.pdf`;
@@ -287,10 +294,10 @@ export async function POST(req: NextRequest) {
 
           // Generar PDF con feedback visual de marcas rojas si está solicitado
           let urlPdfFeedback: string | null = null;
-          if (generarFeedback) {
+          if (generarFeedback && singlePdfBytes) {
             try {
               console.log(`📝 [Feedback] Generando PDF con marcas visuales para página ${pageIdx + 1}...`);
-              const feedbackBuffer = await generarPdfRetroalimentacion(
+              feedbackBuffer = await generarPdfRetroalimentacion(
                 singlePdfBytes,
                 resultadoIA.confianza_lectura ? resultadoIA.nota_total : 0,
                 resultadoIA.nota_maxima || 20,
@@ -392,6 +399,18 @@ export async function POST(req: NextRequest) {
               console.warn(`No se pudo eliminar archivo temporal ${singlePageFilePath}:`, unlinkErr);
             }
           }
+
+          // Liberación de Memoria: Vaciar explícitamente variables de Buffer para Garbage Collector
+          singlePdfBytes = null;
+          singlePdfBuffer = null;
+          feedbackBuffer = null;
+        }
+
+        // Throttling (Pausa Controlada): Pausa de 2000ms después de procesar cada alumno
+        // antes de enviar el siguiente a Gemini para evitar saturación de la API y de memoria
+        if (pageIdx < pageCount - 1) {
+          console.log(`⏳ [Throttling] Pausando 2000ms antes de enviar la página ${pageIdx + 2}/${pageCount} a Gemini...`);
+          await delay(2000);
         }
       }
     } finally {
@@ -412,6 +431,10 @@ export async function POST(req: NextRequest) {
           }
         }
       }
+
+      // Liberación de memoria de buffers de la petición completa
+      directBuffer = null;
+      pdfBuffer = null;
     }
 
     const duracionMs = Date.now() - startTime;

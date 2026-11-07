@@ -5,12 +5,11 @@ import {
   AlertTriangle,
   TrendingDown,
   TrendingUp,
-  HelpCircle,
   BrainCircuit,
   CheckCircle2,
   Sparkles,
 } from 'lucide-react';
-import { ExamenAlumno, DetalleRespuestaItem, DesglosePregunta } from '@/types/database';
+import { ExamenAlumno } from '@/types/database';
 
 interface InsightsProps {
   examenes: ExamenAlumno[];
@@ -18,11 +17,65 @@ interface InsightsProps {
 
 interface EstadisticaPregunta {
   numero: number;
+  etiqueta: string;
   totalIntentos: number;
   totalAciertos: number;
   totalFallos: number;
   porcentajeFallo: number;
   porcentajeAcierto: number;
+}
+
+/**
+ * Normaliza y extrae un mapa clave-valor de las respuestas de un examen
+ * Soporta tanto formato Record/Objeto como Array de preguntas
+ */
+function parsearDetalleRespuestas(
+  raw: any
+): Record<string, { es_correcta: boolean; puntaje_obtenido?: number }> | null {
+  if (!raw) return null;
+  let parsed = raw;
+  if (typeof raw === 'string') {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+
+  if (!parsed) return null;
+
+  // Si es un objeto diccionario (ej. { "1": { es_correcta: true }, "2": { ... } })
+  if (typeof parsed === 'object' && !Array.isArray(parsed)) {
+    const mapa: Record<string, { es_correcta: boolean; puntaje_obtenido?: number }> = {};
+    for (const [key, val] of Object.entries(parsed)) {
+      if (val && typeof val === 'object') {
+        const itemObj = val as any;
+        mapa[key] = {
+          es_correcta: Boolean(itemObj.es_correcta ?? itemObj.correcta ?? false),
+          puntaje_obtenido: itemObj.puntaje_obtenido,
+        };
+      } else if (typeof val === 'boolean') {
+        mapa[key] = { es_correcta: val };
+      }
+    }
+    return Object.keys(mapa).length > 0 ? mapa : null;
+  }
+
+  // Si es un array de preguntas (ej. [ { numero_pregunta: 1, es_correcta: true }, ... ])
+  if (Array.isArray(parsed)) {
+    const mapa: Record<string, { es_correcta: boolean; puntaje_obtenido?: number }> = {};
+    parsed.forEach((item: any, idx: number) => {
+      if (!item) return;
+      const key = item.numero_pregunta !== undefined ? String(item.numero_pregunta) : String(idx + 1);
+      mapa[key] = {
+        es_correcta: Boolean(item.es_correcta),
+        puntaje_obtenido: item.puntaje_obtenido,
+      };
+    });
+    return Object.keys(mapa).length > 0 ? mapa : null;
+  }
+
+  return null;
 }
 
 export default function Insights({ examenes }: InsightsProps) {
@@ -35,72 +88,84 @@ export default function Insights({ examenes }: InsightsProps) {
   const estadisticasPreguntas = useMemo<EstadisticaPregunta[]>(() => {
     if (examenesValidos.length === 0) return [];
 
-    const conteo: Record<number, { intentos: number; aciertos: number; fallos: number }> = {};
+    // 1. Iteración Dinámica: Extraer claves con Object.keys() del primer examen calificado válido
+    const primerExamenValido = examenesValidos.find((ex) => {
+      const mapa =
+        parsearDetalleRespuestas(ex.detalle_respuestas) ||
+        parsearDetalleRespuestas(ex.desglose_json);
+      return mapa !== null && Object.keys(mapa).length > 0;
+    });
 
-    examenesValidos.forEach((ex) => {
-      // Extraer datos ya sea de detalle_respuestas o de desglose_json
-      let items: Array<DetalleRespuestaItem | DesglosePregunta> = [];
+    if (!primerExamenValido) return [];
 
-      if (ex.detalle_respuestas) {
-        try {
-          items =
-            typeof ex.detalle_respuestas === 'string'
-              ? JSON.parse(ex.detalle_respuestas)
-              : ex.detalle_respuestas;
-        } catch (e) {
-          items = [];
+    const mapaPrimerExamen =
+      parsearDetalleRespuestas(primerExamenValido.detalle_respuestas) ||
+      parsearDetalleRespuestas(primerExamenValido.desglose_json);
+
+    if (!mapaPrimerExamen) return [];
+
+    // Obtenemos las claves reales de las preguntas dinámicamente mediante Object.keys()
+    const clavesPreguntas = Object.keys(mapaPrimerExamen).sort((a, b) => {
+      const numA = parseInt(a.replace(/\D/g, ''), 10);
+      const numB = parseInt(b.replace(/\D/g, ''), 10);
+      if (isNaN(numA) || isNaN(numB)) return a.localeCompare(b);
+      return numA - numB;
+    });
+
+    if (clavesPreguntas.length === 0) return [];
+
+    // Pre-parsear respuestas de todos los exámenes válidos
+    const respuestasAlumnos = examenesValidos.map((ex) =>
+      parsearDetalleRespuestas(ex.detalle_respuestas) ||
+      parsearDetalleRespuestas(ex.desglose_json)
+    );
+
+    const resultados: EstadisticaPregunta[] = [];
+
+    // 2. Filtrado Seguro por cada pregunta identificada dinámicamente
+    for (const clave of clavesPreguntas) {
+      let totalAlumnosRespondieron = 0;
+      let totalFallos = 0;
+      let totalAciertos = 0;
+
+      for (const respuestas of respuestasAlumnos) {
+        // Filtrado Seguro: Verificar que la clave exista estrictamente en el JSON del alumno
+        if (!respuestas || !Object.prototype.hasOwnProperty.call(respuestas, clave)) {
+          // Si el alumno no tiene la respuesta registrada, se omite de este divisor específico
+          continue;
+        }
+
+        const item = respuestas[clave];
+        totalAlumnosRespondieron += 1;
+
+        if (item.es_correcta) {
+          totalAciertos += 1;
+        } else {
+          totalFallos += 1;
         }
       }
 
-      if (!items || items.length === 0) {
-        try {
-          items =
-            typeof ex.desglose_json === 'string'
-              ? JSON.parse(ex.desglose_json)
-              : ex.desglose_json || [];
-        } catch (e) {
-          items = [];
-        }
-      }
+      // Prevención matemática de división por cero y NaN
+      if (totalAlumnosRespondieron === 0) continue;
 
-      if (Array.isArray(items)) {
-        items.forEach((item) => {
-          const num = item.numero_pregunta;
-          if (num === undefined || num === null) return;
+      const porcentajeFallo = Math.round((totalFallos / totalAlumnosRespondieron) * 100);
+      const porcentajeAcierto = Math.max(0, 100 - porcentajeFallo);
+      const numParsed = parseInt(clave.replace(/\D/g, ''), 10);
+      const numeroPregunta = isNaN(numParsed) ? resultados.length + 1 : numParsed;
+      const etiqueta = clave.toUpperCase().startsWith('P') ? clave.toUpperCase() : `P${clave}`;
 
-          if (!conteo[num]) {
-            conteo[num] = { intentos: 0, aciertos: 0, fallos: 0 };
-          }
+      resultados.push({
+        numero: numeroPregunta,
+        etiqueta,
+        totalIntentos: totalAlumnosRespondieron,
+        totalAciertos,
+        totalFallos,
+        porcentajeFallo: isNaN(porcentajeFallo) ? 0 : porcentajeFallo,
+        porcentajeAcierto: isNaN(porcentajeAcierto) ? 0 : porcentajeAcierto,
+      });
+    }
 
-          conteo[num].intentos += 1;
-          if (item.es_correcta) {
-            conteo[num].aciertos += 1;
-          } else {
-            conteo[num].fallos += 1;
-          }
-        });
-      }
-    });
-
-    const numerosOrdenados = Object.keys(conteo)
-      .map(Number)
-      .sort((a, b) => a - b);
-
-    return numerosOrdenados.map((num) => {
-      const data = conteo[num];
-      const porcentajeFallo =
-        data.intentos > 0 ? Math.round((data.fallos / data.intentos) * 100) : 0;
-      const porcentajeAcierto = 100 - porcentajeFallo;
-
-      return {
-        numero: num,
-        totalIntentos: data.intentos,
-        totalAciertos: data.aciertos,
-        totalFallos: data.fallos,
-        porcentajeFallo,
-        porcentajeAcierto,
-      };
-    });
+    return resultados;
   }, [examenesValidos]);
 
   // Preguntas con tasa de fallo crítica (>= 60%)
@@ -109,7 +174,7 @@ export default function Insights({ examenes }: InsightsProps) {
     [estadisticasPreguntas]
   );
 
-  // Pregunta más difícil y más accesible
+  // Pregunta más difícil, más accesible y tasa global segura (sin NaN)
   const { masDificil, masFacil, tasaGlobalAcierto } = useMemo(() => {
     if (estadisticasPreguntas.length === 0) {
       return { masDificil: null, masFacil: null, tasaGlobalAcierto: 0 };
@@ -146,7 +211,7 @@ export default function Insights({ examenes }: InsightsProps) {
               Analíticas de Dificultad & Curva de Aprendizaje
             </h3>
             <p className="text-xs text-slate-500">
-              Diagnóstico pedagógico automático extraído del desglose de {examenesValidos.length} exámenes calificados.
+              Diagnóstico pedagógico dinámico sobre {examenesValidos.length} exámenes calificados.
             </p>
           </div>
         </div>
@@ -173,7 +238,7 @@ export default function Insights({ examenes }: InsightsProps) {
                   ⚠️ Atención: El {p.porcentajeFallo}% de los alumnos falló la Pregunta {p.numero}
                 </span>
                 <p className="text-rose-800 leading-relaxed">
-                  {p.totalFallos} de {p.totalIntentos} estudiantes no obtuvieron puntaje completo en este ítem. Considere revisar la claridad de la rúbrica o repasar este tema pedagógico en clase.
+                  {p.totalFallos} de {p.totalIntentos} estudiantes evaluados en este ítem no obtuvieron puntaje completo. Considere revisar la claridad de la rúbrica o repasar este tema pedagógico en clase.
                 </p>
               </div>
             </div>
@@ -222,7 +287,7 @@ export default function Insights({ examenes }: InsightsProps) {
 
         <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between">
           <div>
-            <div className="text-[11px] text-slate-500 font-medium">Ítems Evaluados</div>
+            <div className="text-[11px] text-slate-500 font-medium">Ítems Evaluados Dinámicamente</div>
             <div className="text-base font-bold text-slate-800 mt-0.5">
               {estadisticasPreguntas.length} Preguntas
             </div>
@@ -251,7 +316,7 @@ export default function Insights({ examenes }: InsightsProps) {
                 <div className="flex items-center justify-between text-xs">
                   <div className="flex items-center gap-1.5">
                     <span className="font-bold text-slate-800 bg-white border border-slate-200 px-1.5 py-0.5 rounded text-[11px]">
-                      P{p.numero}
+                      {p.etiqueta}
                     </span>
                     <span className="text-slate-500 text-[11px]">
                       {p.totalAciertos}/{p.totalIntentos} aciertos
@@ -292,4 +357,3 @@ export default function Insights({ examenes }: InsightsProps) {
     </div>
   );
 }
-

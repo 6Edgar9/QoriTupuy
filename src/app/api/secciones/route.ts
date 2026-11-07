@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { revalidatePath } from 'next/cache';
 import { prisma } from '@/lib/prisma';
 import { ItemRubrica } from '@/types/database';
 
@@ -66,6 +67,11 @@ export async function POST(req: NextRequest) {
         url_plantilla_pdf: url_plantilla_pdf || null,
       },
     });
+
+    // Revalidación Forzada del caché del servidor de Next.js
+    revalidatePath('/cursos/[id]/[eval_id]/[seccion_id]');
+    revalidatePath(`/secciones/${nuevaSeccion.id}`);
+    revalidatePath('/cursos');
 
     return NextResponse.json(
       {

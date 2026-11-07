@@ -15,6 +15,29 @@ build/
 dist/
 *.tsbuildinfo
 next-env.d.ts
+.turbo/
+
+# Base de datos local (SQLite & Prisma)
+prisma/*.db
+prisma/*.db-journal
+prisma/*.db-shm
+prisma/*.db-wal
+*.sqlite
+*.sqlite-journal
+*.db
+*.db-journal
+
+# Archivos subidos y PDFs generados (Exámenes y Feedback)
+public/uploads/*
+!public/uploads/.gitkeep
+!public/uploads/examenes/
+public/uploads/examenes/*
+!public/uploads/examenes/.gitkeep
+!public/uploads/feedback/
+public/uploads/feedback/*
+!public/uploads/feedback/.gitkeep
+tmp/
+.temp/
 
 # Variables de entorno y credenciales (¡Seguridad Crítica!)
 .env
