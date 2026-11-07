@@ -1,23 +1,25 @@
 import { GoogleGenAI, Type, Schema } from '@google/genai';
 import { ItemRubrica, DesglosePregunta, TipoPregunta } from '@/types/database';
 
-// Modelos Gemini candidatos en orden de preferencia y resiliencia (con fallback a Flash)
+// Modelos Gemini candidatos en orden de preferencia y resiliencia
+// Se prioriza gemini-2.5-flash por su alta disponibilidad, velocidad y soporte multimodal activo
 const PRIMARY_MODELS = [
-  process.env.GEMINI_MODEL || 'gemini-1.5-pro',
-  'gemini-2.5-pro',
-];
+  process.env.GEMINI_MODEL,
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
+].filter(Boolean) as string[];
 
 const RESCUE_MODELS = [
-  'gemini-2.5-flash',
   'gemini-1.5-flash',
   'gemini-flash-latest',
+  'gemini-2.5-pro',
 ];
 
 // Helper para pausas asíncronas
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Función auxiliar para detectar si un error es transitorio (503 UNAVAILABLE o 429 RATE_LIMIT/QUOTA)
+ * Función auxiliar para detectar si un error es transitorio (503 UNAVAILABLE, 429 RATE_LIMIT/QUOTA o fallos de red)
  */
 function isTransientError(error: any): boolean {
   if (!error) return false;
@@ -36,7 +38,13 @@ function isTransientError(error: any): boolean {
     msg.includes('unavailable') ||
     msg.includes('resource_exhausted') ||
     msg.includes('quota') ||
-    msg.includes('rate limit')
+    msg.includes('rate limit') ||
+    msg.includes('fetch failed') ||
+    msg.includes('network') ||
+    msg.includes('econnreset') ||
+    msg.includes('etimedout') ||
+    msg.includes('timeout') ||
+    msg.includes('socket hang up')
   );
 }
 function getGeminiClient(): GoogleGenAI {

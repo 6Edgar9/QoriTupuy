@@ -345,7 +345,43 @@ export async function POST(req: NextRequest) {
           });
         } catch (pageError: any) {
           console.error(`❌ Error evaluando página ${pageIdx + 1} de ${pageCount}:`, pageError);
-          throw pageError;
+          // Resiliencia por lotes: Si una página individual falla en la inferencia, no abortamos el lote completo.
+          // La registramos preventivamente en SQLite para que el profesor la califique en la bandeja de revisión.
+          try {
+            const pageExamFileName = `examen_${timePrefix}_p${pageIdx + 1}.pdf`;
+            const studentUrlPdf = `/uploads/examenes/${pageExamFileName}`;
+            const maxScore = rubrica.reduce((acc, r) => acc + (r.puntaje || 0), 0) || 20;
+
+            const examenFallo = await prisma.examenAlumno.create({
+              data: {
+                seccion_id: seccionId,
+                evaluacion_id: evaluacionId,
+                curso_id: cursoId,
+                codigo_alumno: '',
+                nombre: `Alumno Pág ${pageIdx + 1} (Revisión Requerida)`,
+                nota_total: 0,
+                nota_maxima: maxScore,
+                confianza_lectura: false,
+                estado_revision: 'requiere_revision_manual',
+                url_pdf: studentUrlPdf,
+                ruta_storage_pdf: path.join(examenesDir, pageExamFileName),
+                desglose_json: '[]',
+                detalle_respuestas: '[]',
+                url_pdf_feedback: null,
+                motivo_revision_manual: `Alerta durante análisis IA: ${pageError.message || 'Fallo de inferencia'}. Requiere calificación manual.`,
+              },
+            });
+
+            examenesCreados.push({
+              ...examenFallo,
+              desglose_json: [],
+              detalle_respuestas: [],
+            });
+            console.log(`⚠️ Página ${pageIdx + 1} guardada preventivamente en la bandeja de revisión urgente.`);
+          } catch (dbErr) {
+            console.error(`No se pudo registrar examen con fallo en BD:`, dbErr);
+            if (pageCount === 1) throw pageError;
+          }
         } finally {
           // Prevención de Fuga de Memoria: eliminar físicamente el archivo PDF temporal de esa página
           if (singlePageFilePath && fs.existsSync(singlePageFilePath)) {

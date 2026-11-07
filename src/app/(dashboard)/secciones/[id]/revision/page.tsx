@@ -16,6 +16,8 @@ import {
 } from 'lucide-react';
 import { ExamenAlumno } from '@/types/database';
 import ManualGradingDrawer from '@/components/exam/ManualGradingDrawer';
+import { useSeccionDetalle } from '@/hooks/useSeccionDetalle';
+import SectionBreadcrumb from '@/components/navigation/SectionBreadcrumb';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -32,8 +34,7 @@ export default function BandejaRevisionPage({ params }: PageProps) {
   const seccionId = resolvedParams.id;
   const searchParams = useSearchParams();
 
-  const cursoId = searchParams.get('cursoId') || 'curso_demo';
-  const evaluacionId = searchParams.get('evaluacionId') || 'eval_demo';
+  const { seccion, loading: loadingSeccion } = useSeccionDetalle(seccionId);
 
   const [examenes, setExamenes] = useState<ExamenAlumno[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -79,7 +80,7 @@ export default function BandejaRevisionPage({ params }: PageProps) {
 
   useEffect(() => {
     cargarExamenesRevision();
-  }, [cursoId, evaluacionId, seccionId]);
+  }, [seccionId]);
 
   // Manejador para exportar a Excel USS
   const handleExportarExcel = async () => {
@@ -210,6 +211,13 @@ export default function BandejaRevisionPage({ params }: PageProps) {
         ))}
       </div>
 
+      {/* Migas de pan legibles */}
+      <SectionBreadcrumb
+        seccion={seccion}
+        loading={loadingSeccion}
+        paginaActual="Bandeja de Revisión"
+      />
+
       {/* Banner de Alerta Informativo y Acciones */}
       <div className="bg-amber-500/10 border border-amber-300 rounded-2xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex items-start gap-3.5">
@@ -218,9 +226,20 @@ export default function BandejaRevisionPage({ params }: PageProps) {
           </div>
           <div>
             <h1 className="text-xl font-bold text-slate-900">
-              Bandeja de Revisión Manual Requerida
+              Bandeja de Revisión:{' '}
+              {loadingSeccion ? (
+                <span className="inline-block w-40 h-5 bg-amber-200/50 animate-pulse rounded align-middle" />
+              ) : (
+                <>
+                  {seccion?.nombre || 'Sección'}{' '}
+                  <span className="text-amber-800 font-medium text-sm sm:text-base">
+                    ({seccion?.evaluacion?.titulo || 'Evaluación'} — {seccion?.evaluacion?.curso?.nombre || 'Curso'})
+                  </span>
+                </>
+              )}
             </h1>
             <p className="text-xs sm:text-sm text-slate-600 mt-1">
+              {seccion?.evaluacion?.curso?.codigo ? `${seccion.evaluacion.curso.codigo} • ` : ''}
               Exámenes detectados con caligrafía ilegible, hoja en blanco, archivos corruptos o inconsistencias. Requieren validación docente.
             </p>
           </div>

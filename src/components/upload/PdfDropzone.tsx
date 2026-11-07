@@ -138,9 +138,11 @@ export default function PdfDropzone({
       setUploadState('error');
       let msg = err.message || 'Ocurrió un error inesperado al procesar el examen.';
 
-      // Limpieza preventiva si se filtró algún JSON de error crudo
+      // Limpieza preventiva si se filtró algún JSON de error crudo o fallo de red
       if (msg.includes('503') || msg.includes('UNAVAILABLE') || msg.includes('high demand') || msg.includes('SERVICE_OVERLOADED')) {
         msg = 'Los servidores de Inteligencia Artificial están saturados globalmente. Tu examen no se pudo evaluar. Por favor, intenta de nuevo en unos minutos.';
+      } else if (msg.includes('fetch failed') || msg.includes('network') || msg.includes('ENOTFOUND')) {
+        msg = 'Hubo una interrupción temporal de conexión con el proveedor de IA. Por favor, verifica tu conexión a internet y vuelve a intentar.';
       }
 
       setStatusMessage(msg);

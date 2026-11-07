@@ -798,7 +798,7 @@ export default function GestionCursosPage() {
                   </div>
 
                   <Link
-                    href={`/secciones/${sec.id}?cursoId=${cursoSeleccionado?.id}&evaluacionId=${evaluacionSeleccionada.id}`}
+                    href={`/secciones/${sec.id}`}
                     className="inline-flex items-center justify-center gap-2 px-3 py-2 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-lg shadow-sm transition-all"
                   >
                     <span>Abrir Panel de Calificación</span>

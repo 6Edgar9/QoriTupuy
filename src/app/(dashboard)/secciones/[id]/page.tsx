@@ -1,7 +1,6 @@
 'use client';
 
 import React, { use, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
   FileCheck,
@@ -13,6 +12,8 @@ import {
 } from 'lucide-react';
 import PdfDropzone from '@/components/upload/PdfDropzone';
 import { ExamenAlumno } from '@/types/database';
+import { useSeccionDetalle } from '@/hooks/useSeccionDetalle';
+import SectionBreadcrumb from '@/components/navigation/SectionBreadcrumb';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -21,12 +22,12 @@ interface PageProps {
 export default function SeccionDashboardPage({ params }: PageProps) {
   const resolvedParams = use(params);
   const seccionId = resolvedParams.id;
-  const searchParams = useSearchParams();
 
-  const cursoId = searchParams.get('cursoId') || 'MAT-201';
-  const evaluacionId = searchParams.get('evaluacionId') || 'PARCIAL-1';
-
+  const { seccion, loading } = useSeccionDetalle(seccionId);
   const [ultimosProcesados, setUltimosProcesados] = useState<ExamenAlumno[]>([]);
+
+  const cursoId = seccion?.evaluacion?.curso_id || '';
+  const evaluacionId = seccion?.evaluacion_id || '';
 
   const handleGradingSuccess = (examen: ExamenAlumno) => {
     setUltimosProcesados((prev) => [examen, ...prev]);
@@ -37,40 +38,48 @@ export default function SeccionDashboardPage({ params }: PageProps) {
       {/* Breadcrumb y Encabezado */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2 text-xs text-slate-500 font-medium mb-1">
-            <span>Cursos</span>
-            <span>/</span>
-            <span>{cursoId}</span>
-            <span>/</span>
-            <span>{evaluacionId}</span>
-            <span>/</span>
-            <span className="text-amber-700 font-bold uppercase">{seccionId}</span>
-          </div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
-            Gestión de Evaluación: <span className="text-amber-600 capitalize">{seccionId.replace('-', ' ')}</span>
-          </h1>
-          <p className="text-sm text-slate-500 mt-1">
-            Sube exámenes manuscritos escaneados para su evaluación instantánea mediante visión computacional.
-          </p>
+          {/* Migas de pan legibles */}
+          <SectionBreadcrumb seccion={seccion} loading={loading} />
+
+          {/* Título y subtítulo con nombres reales de la BD */}
+          {loading ? (
+            <div className="space-y-2 mt-1">
+              <div className="h-8 w-72 sm:w-96 bg-slate-200 animate-pulse rounded-xl" />
+              <div className="h-4 w-60 sm:w-80 bg-slate-100 animate-pulse rounded" />
+            </div>
+          ) : (
+            <div>
+              <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
+                {seccion?.nombre || 'Gestión de Sección'}{' '}
+                <span className="text-amber-600 font-semibold text-lg sm:text-2xl block sm:inline">
+                  — {seccion?.evaluacion?.titulo || 'Evaluación'} ({seccion?.evaluacion?.curso?.nombre || 'Curso'})
+                </span>
+              </h1>
+              <p className="text-sm text-slate-500 mt-1">
+                {seccion?.evaluacion?.curso?.codigo ? `${seccion.evaluacion.curso.codigo} • ` : ''}
+                Periodo {seccion?.evaluacion?.curso?.periodo || 'Académico'} • Sube exámenes manuscritos escaneados para evaluación instantánea con Gemini.
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Accesos rápidos a las dos tablas */}
         <div className="flex items-center gap-3">
           <Link
-            href={`/secciones/${seccionId}/calificados?cursoId=${cursoId}&evaluacionId=${evaluacionId}`}
+            href={`/secciones/${seccionId}/calificados`}
             className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl transition-all shadow-sm"
           >
             <FileCheck className="w-4 h-4 text-emerald-600" />
-            <span>Ver Calificados (&ge;85%)</span>
+            <span>Ver Calificados Confiables</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </Link>
 
           <Link
-            href={`/secciones/${seccionId}/revision?cursoId=${cursoId}&evaluacionId=${evaluacionId}`}
+            href={`/secciones/${seccionId}/revision`}
             className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-semibold text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-xl transition-all shadow-sm"
           >
             <AlertTriangle className="w-4 h-4 text-amber-600" />
-            <span>Bandeja Revisión (&lt;85%)</span>
+            <span>Bandeja Revisión</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </Link>
         </div>
@@ -87,16 +96,24 @@ export default function SeccionDashboardPage({ params }: PageProps) {
             Cargar Exámenes Escaneados
           </h2>
           <p className="text-xs text-slate-500 mt-1">
-            Los PDFs y la base de datos se gestionan 100% de forma local (Offline-First en SQLite) y se envían a Gemini contrastando la rúbrica de esta sección.
+            Persistencia 100% local (SQLite + File System) e inferencia multimodal con Gemini contrastando la rúbrica de esta sección.
           </p>
         </div>
 
-        <PdfDropzone
-          cursoId={cursoId}
-          evaluacionId={evaluacionId}
-          seccionId={seccionId}
-          onGradingSuccess={handleGradingSuccess}
-        />
+        {loading ? (
+          <div className="w-full h-48 bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl flex items-center justify-center">
+            <div className="text-xs text-slate-400 font-medium animate-pulse">
+              Cargando configuración de la sección...
+            </div>
+          </div>
+        ) : (
+          <PdfDropzone
+            cursoId={cursoId}
+            evaluacionId={evaluacionId}
+            seccionId={seccionId}
+            onGradingSuccess={handleGradingSuccess}
+          />
+        )}
       </div>
 
       {/* Últimos exámenes procesados en esta sesión */}
@@ -135,4 +152,3 @@ export default function SeccionDashboardPage({ params }: PageProps) {
     </div>
   );
 }
-

@@ -10,6 +10,13 @@ export async function GET(
     const { id } = await params;
     const seccion = await prisma.seccion.findUnique({
       where: { id },
+      include: {
+        evaluacion: {
+          include: {
+            curso: true,
+          },
+        },
+      },
     });
 
     if (!seccion) {

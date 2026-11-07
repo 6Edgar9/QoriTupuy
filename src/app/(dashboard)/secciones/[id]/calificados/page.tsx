@@ -29,6 +29,8 @@ import { ExamenAlumno } from '@/types/database';
 import PdfViewerModal from '@/components/exam/PdfViewerModal';
 import ManualGradingDrawer from '@/components/exam/ManualGradingDrawer';
 import Insights from '@/components/dashboard/Insights';
+import { useSeccionDetalle } from '@/hooks/useSeccionDetalle';
+import SectionBreadcrumb from '@/components/navigation/SectionBreadcrumb';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -45,8 +47,7 @@ export default function ExamenesResultadosPage({ params }: PageProps) {
   const seccionId = resolvedParams.id;
   const searchParams = useSearchParams();
 
-  const cursoId = searchParams.get('cursoId') || 'curso_demo';
-  const evaluacionId = searchParams.get('evaluacionId') || 'eval_demo';
+  const { seccion, loading: loadingSeccion } = useSeccionDetalle(seccionId);
 
   const [activeTab, setActiveTab] = useState<'confiables' | 'revision'>('confiables');
   const [examenes, setExamenes] = useState<ExamenAlumno[]>([]);
@@ -98,7 +99,7 @@ export default function ExamenesResultadosPage({ params }: PageProps) {
 
   useEffect(() => {
     cargarExamenes();
-  }, [cursoId, evaluacionId, seccionId]);
+  }, [seccionId]);
 
   // Exámenes clasificados por confianza_lectura
   const examenesConfiables = useMemo(
@@ -304,12 +305,30 @@ export default function ExamenesResultadosPage({ params }: PageProps) {
       {/* Cabecera Principal y Acciones */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
-            Resultados y Calificaciones
-          </h1>
-          <p className="text-sm text-slate-500 mt-1">
-            Gestión de exámenes evaluados con Gemini 1.5 Pro, feedback visual y persistencia SQLite.
-          </p>
+          <SectionBreadcrumb
+            seccion={seccion}
+            loading={loadingSeccion}
+            paginaActual="Resultados y Calificaciones"
+          />
+          {loadingSeccion ? (
+            <div className="space-y-1.5 mt-1">
+              <div className="h-8 w-72 sm:w-96 bg-slate-200 animate-pulse rounded-xl" />
+              <div className="h-4 w-60 sm:w-80 bg-slate-100 animate-pulse rounded" />
+            </div>
+          ) : (
+            <div>
+              <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
+                Resultados: {seccion ? seccion.nombre : 'Sección'}{' '}
+                <span className="text-amber-600 font-semibold text-base sm:text-xl block sm:inline">
+                  ({seccion?.evaluacion?.titulo || 'Evaluación'} — {seccion?.evaluacion?.curso?.nombre || 'Curso'})
+                </span>
+              </h1>
+              <p className="text-sm text-slate-500 mt-1">
+                {seccion?.evaluacion?.curso?.codigo ? `${seccion.evaluacion.curso.codigo} • ` : ''}
+                Gestión de exámenes evaluados con Gemini 1.5 Pro, feedback visual y persistencia SQLite.
+              </p>
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-2.5 flex-wrap">
