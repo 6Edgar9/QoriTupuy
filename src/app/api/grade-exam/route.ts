@@ -13,13 +13,14 @@ const delay = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
 /**
  * Genera un PDF de retroalimentación estampando la nota en rojo en la esquina superior derecha
- * y agregando un resumen de aciertos y fallos en el encabezado.
+ * y agregando un resumen de aciertos y fallos en el encabezado y margen inferior,
+ * iterando sobre el arreglo de respuestas y evaluando el campo userIsCorrect.
  */
 async function generarPdfRetroalimentacion(
   pagePdfBytes: Uint8Array,
   notaTotal: number,
   notaMaxima: number,
-  desglose: DesglosePregunta[],
+  respuestas: Array<any>,
   nombreAlumno: string
 ): Promise<Buffer> {
   const doc = await PDFDocument.load(pagePdfBytes);
@@ -57,11 +58,30 @@ async function generarPdfRetroalimentacion(
     color: rgb(0.85, 0.1, 0.1),
   });
 
-  // 2. Resumen de preguntas falladas en el encabezado izquierdo
-  const falladas = desglose.filter((d) => !d.es_correcta);
+  // 2. Iterar sobre el arreglo de respuestas y evaluar userIsCorrect
+  const preguntasFalladas: string[] = [];
+  const listaRespuestas = Array.isArray(respuestas) ? respuestas : [];
+
+  listaRespuestas.forEach((item, index) => {
+    if (!item) return;
+    // Leer el campo userIsCorrect dentro del arreglo de respuestas
+    const isCorrect =
+      item.userIsCorrect !== undefined
+        ? Boolean(item.userIsCorrect)
+        : item.es_correcta !== undefined
+        ? Boolean(item.es_correcta)
+        : false;
+
+    if (!isCorrect) {
+      const etiqueta = item.question || `P${item.numero_pregunta || index + 1}`;
+      preguntasFalladas.push(etiqueta);
+    }
+  });
+
+  // 3. Resumen en el encabezado
   const textoFeedback =
-    falladas.length > 0
-      ? `Falló Pregunta(s): ${falladas.map((f) => `P${f.numero_pregunta}`).join(', ')}`
+    preguntasFalladas.length > 0
+      ? `Falló ${preguntasFalladas.length} pregunta(s): ${preguntasFalladas.slice(0, 5).join(', ')}${preguntasFalladas.length > 5 ? '...' : ''}`
       : '¡Todas las preguntas respondidas correctamente!';
 
   firstPage.drawText(textoFeedback, {
@@ -69,10 +89,22 @@ async function generarPdfRetroalimentacion(
     y: height - 32,
     size: 10,
     font: helveticaBold,
-    color: falladas.length > 0 ? rgb(0.85, 0.1, 0.1) : rgb(0.1, 0.6, 0.2),
+    color: preguntasFalladas.length > 0 ? rgb(0.85, 0.1, 0.1) : rgb(0.1, 0.6, 0.2),
   });
 
-  // 3. Pie de página institucional
+  // 4. Resumen en el margen inferior resumiendo las preguntas incorrectas por su índice
+  if (preguntasFalladas.length > 0) {
+    const textoMargenInferior = `Revisión de Errores: ${preguntasFalladas.join(' | ')}`;
+    firstPage.drawText(textoMargenInferior.slice(0, 110), {
+      x: 25,
+      y: 26,
+      size: 8.5,
+      font: helveticaBold,
+      color: rgb(0.85, 0.1, 0.1),
+    });
+  }
+
+  // 5. Pie de página institucional
   firstPage.drawText(
     `QoriTupuy Feedback Docente | Alumno: ${nombreAlumno} | Calificado con Gemini AI`,
     {
@@ -292,6 +324,17 @@ export async function POST(req: NextRequest) {
             observaciones: item.observaciones || '',
           }));
 
+          // Estructurar detalle_respuestas para el dashboard de analíticas con formato { question, correctAnswer, userAnswer, userIsCorrect }
+          const detalleRespuestas = desgloseSanitizado.map((item, idx) => ({
+            question: `Pregunta ${item.numero_pregunta || idx + 1}`,
+            correctAnswer: String(item.respuesta_correcta ?? ''),
+            userAnswer: String(item.respuesta_detectada ?? ''),
+            userIsCorrect: Boolean(item.es_correcta),
+            numero_pregunta: item.numero_pregunta || idx + 1,
+            es_correcta: Boolean(item.es_correcta),
+            puntaje_obtenido: item.puntaje_obtenido,
+          }));
+
           // Generar PDF con feedback visual de marcas rojas si está solicitado
           let urlPdfFeedback: string | null = null;
           if (generarFeedback && singlePdfBytes) {
@@ -301,7 +344,7 @@ export async function POST(req: NextRequest) {
                 singlePdfBytes,
                 resultadoIA.confianza_lectura ? resultadoIA.nota_total : 0,
                 resultadoIA.nota_maxima || 20,
-                desgloseSanitizado,
+                detalleRespuestas,
                 resultadoIA.nombre_detectado || `Alumno Pág ${pageIdx + 1}`
               );
               const feedbackFileName = `feedback_${timePrefix}_p${pageIdx + 1}.pdf`;
@@ -312,15 +355,6 @@ export async function POST(req: NextRequest) {
               console.warn(`⚠️ No se pudo generar PDF de feedback para página ${pageIdx + 1}:`, feedErr);
             }
           }
-
-          // Estructurar detalle_respuestas para el dashboard de analíticas
-          const detalleRespuestas = desgloseSanitizado.map((item) => ({
-            numero_pregunta: item.numero_pregunta,
-            es_correcta: item.es_correcta,
-            puntaje_obtenido: item.puntaje_obtenido,
-            respuesta_detectada: item.respuesta_detectada,
-            respuesta_correcta: item.respuesta_correcta,
-          }));
 
           // Persistir examen en SQLite con Prisma de forma secuencial
           const nuevoExamen = await prisma.examenAlumno.create({

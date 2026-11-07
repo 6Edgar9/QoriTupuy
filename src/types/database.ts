@@ -101,9 +101,13 @@ export interface DesglosePregunta {
 }
 
 export interface DetalleRespuestaItem {
-  numero_pregunta: number;
-  es_correcta: boolean;
-  puntaje_obtenido: number;
+  question?: string;
+  correctAnswer?: string;
+  userAnswer?: string;
+  userIsCorrect?: boolean;
+  numero_pregunta?: number;
+  es_correcta?: boolean;
+  puntaje_obtenido?: number;
   puntaje_maximo?: number;
   respuesta_detectada?: string;
   respuesta_correcta?: string;
